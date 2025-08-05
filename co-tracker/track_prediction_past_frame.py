@@ -79,7 +79,8 @@ def analyze_video_clip(
     last_n_frames: int = 0,
     output_video_path: Optional[Path] = None, 
     fps_override: Optional[float] = None, 
-    show_video: bool = False
+    show_video: bool = False,
+    video_fov_degrees: float = 104.0
 ) -> Tuple[List[Dict[str, Any]], List[float]]:
     """
     Processes a single video clip, aware of overlapping frames between clips.
@@ -140,7 +141,7 @@ def analyze_video_clip(
         head_movement, recalculated_pos, prediction_error = None, None, None
 
         if prev_red_pos and curr_red_pos:
-            head_movement = calculate_head_movement(prev_red_pos, curr_red_pos, width, height)
+            head_movement = calculate_head_movement(prev_red_pos, curr_red_pos, width, height, video_fov_degrees=video_fov_degrees)
             if head_movement and frame_data:
                 frame_data[-1]['next_movement'] = head_movement
 
@@ -211,6 +212,7 @@ def main():
                        help='Filename parsing mode: "advanced" for complex pattern, "default" for recording_X_Y.mp4 pattern.')
     parser.add_argument('--fps', '-f', type=float, help='Override video FPS.')
     parser.add_argument('--show', '-s', action='store_true', help='Show video processing in real-time.')
+    parser.add_argument('--fov', '-v', type=float, default=104.0, help='Field of view of the video.')
     args = parser.parse_args()
 
     input_path = Path(args.input_dir)
@@ -262,7 +264,8 @@ def main():
                 last_n_frames=expected_frames,
                 output_video_path=output_video_file,
                 fps_override=args.fps,
-                show_video=args.show
+                show_video=args.show,
+                video_fov_degrees=args.fov
             )
             all_frames_data.extend(clip_frames)
             all_prediction_errors.extend(clip_errors)
