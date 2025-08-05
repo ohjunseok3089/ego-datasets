@@ -214,7 +214,6 @@ if __name__ == "__main__":
             cap = cv2.VideoCapture(os.path.join(save_dir, output_filename + ".mp4"))
             actual_end_frame = end_frame
             i = 0
-            print(f"window_frames: {len(window_frames)}")
             while True:
                 ret, cv_frame = cap.read()
                 if not ret:
@@ -222,7 +221,6 @@ if __name__ == "__main__":
                 red_circle = detect_red_circle(cv_frame)
                 if red_circle is None:
                     print(f"Red circle not detected in frame {actual_start_frame + i}. Truncating video backward.")
-                    actual_end_frame = actual_start_frame + i
                     
                     # i is the index in window_frames where red circle was not detected
                     frames_to_keep = i
@@ -230,14 +228,13 @@ if __name__ == "__main__":
                         # CoTracker uses model.step * 2 frames for processing, so we need to account for frozen frames
                         # The actual processed frames are the last model.step * 2 frames from window_frames
                         frozen_frames = model.step * 2
-                        # processed_frames = frozen_frames - len(window_frames)
-                        actual_processed_frames = min(frames_to_keep, frozen_frames)
+                        processed_frames = frozen_frames - len(window_frames)
+                        actual_processed_frames = i - processed_frames
                         
-                        # Take the last actual_processed_frames from window_frames up to frames_to_keep
-                        start_idx = max(0, frames_to_keep - actual_processed_frames)
-                        truncated_window_frames = window_frames[start_idx:frames_to_keep]
+                        actual_end_frame = actual_start_frame + actual_processed_frames
+                        truncated_window_frames = window_frames[:actual_processed_frames]
                         
-                        print(f"Truncated window_frames: kept {len(truncated_window_frames)} frames (frames {start_idx} to {frames_to_keep-1}) out of {frames_to_keep} total frames")
+                        print(f"Truncated window_frames: kept {len(truncated_window_frames)} frames (frames {actual_processed_frames} to {frames_to_keep-1}) out of {frames_to_keep} total frames")
                         print(f"Accounted for frozen frames: {frozen_frames} frames used by CoTracker")
                         
                         truncated_video_tensor = torch.tensor(np.stack(truncated_window_frames), device=DEFAULT_DEVICE).permute(
