@@ -1,7 +1,7 @@
-#!/usr/bin/env python3
 """
 Processes video clips to track a red circle, calculates head movement,
-and aggregates the analysis results from multiple clips into a single JSON file.
+and aggregates the analysis results, correctly handling overlapping frames
+and adding 'next_movement' data to each frame.
 """
 
 import argparse
@@ -14,48 +14,12 @@ from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional
 
 # Assuming track_red.py with these functions exists in the same directory
-# You need to have a `track_red.py` file with these functions defined.
-# from track_red import detect_red_circle, calculate_head_movement, remap_position_from_movement
-
-# --- Mock functions if track_red.py is not available ---
-def detect_red_circle(frame):
-    # This is a placeholder. Use your actual detection logic.
-    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    lower_red = np.array([0, 120, 70])
-    upper_red = np.array([10, 255, 255])
-    mask1 = cv2.inRange(hsv, lower_red, upper_red)
-    lower_red = np.array([170, 120, 70])
-    upper_red = np.array([180, 255, 255])
-    mask2 = cv2.inRange(hsv, lower_red, upper_red)
-    mask = mask1 + mask2
-    circles = cv2.HoughCircles(mask, cv2.HOUGH_GRADIENT, 1, 20, param1=50, param2=15, minRadius=5, maxRadius=50)
-    if circles is not None:
-        return circles[0][0]
-    return None
-
-def calculate_head_movement(prev_pos, curr_pos, width, height):
-    # This is a placeholder.
-    dx = curr_pos[0] - prev_pos[0]
-    dy = curr_pos[1] - prev_pos[1]
-    return {"horizontal": {"degrees": dx}, "vertical": {"degrees": dy}, "radians": {}}
-
-def remap_position_from_movement(prev_pos, movement, width, height):
-    # This is a placeholder.
-    return (prev_pos[0] + movement['horizontal']['degrees'], prev_pos[1] + movement['vertical']['degrees'])
-# --- End of mock functions ---
+from track_red import detect_red_circle, calculate_head_movement, remap_position_from_movement
 
 
 def parse_video_filename(filename: str) -> Optional[Dict[str, Any]]:
     """
     Parses a video filename to extract metadata based on a specific pattern.
-
-    Args:
-        filename: The name of the video file.
-
-    Pattern Example: 'vid_003__day_1__con_1__person_1_part3(1140_1800_social_interaction)_0_15.MP4'
-    
-    Returns:
-        A dictionary with parsed components or None if the pattern doesn't match.
     """
     pattern = re.compile(
         r"^(?P<base_name>.+?\((?P<start_frame>\d+)_(?P<end_frame>\d+)_(?P<category>[a-zA-Z_]+)\))_"
@@ -69,7 +33,7 @@ def parse_video_filename(filename: str) -> Optional[Dict[str, Any]]:
         
     data = match.groupdict()
     data['group_id'] = data.pop('base_name')
-    data['social_category'] = data.pop('category') # Explicitly handle social_category
+    data['social_category'] = data.pop('category')
     
     for key in ['start_frame', 'end_frame', 'processed_start', 'processed_end']:
         data[key] = int(data[key])
@@ -79,14 +43,15 @@ def parse_video_filename(filename: str) -> Optional[Dict[str, Any]]:
 def analyze_video_clip(
     video_path: Path, 
     global_frame_offset: int, 
-    social_category: str, # <-- ADDED: Pass category to the function
+    social_category: str,
+    is_first_clip_in_group: bool,
     frozen_frame_skip: int = 0,
     output_video_path: Optional[Path] = None, 
     fps_override: Optional[float] = None, 
     show_video: bool = False
 ) -> Tuple[List[Dict[str, Any]], List[float]]:
     """
-    Processes a single video clip to detect a red circle and analyze movement.
+    Processes a single video clip, aware of overlapping frames between clips.
     """
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
@@ -106,13 +71,21 @@ def analyze_video_clip(
     frame_data = []
     prediction_errors = []
     prev_red_pos = None
-    frame_idx = 0
-    
+    frame_idx_in_video = 0
+    output_frame_count = 0
+
     while True:
         ret, frame = cap.read()
         if not ret:
             break
-        
+
+        if not is_first_clip_in_group and frame_idx_in_video == 0:
+            red_circle = detect_red_circle(frame)
+            if red_circle:
+                prev_red_pos = (float(red_circle[0]), float(red_circle[1]))
+            frame_idx_in_video += 1
+            continue
+
         vis_frame = frame.copy()
         red_circle = detect_red_circle(frame)
         
@@ -123,6 +96,9 @@ def analyze_video_clip(
 
         if prev_red_pos and curr_red_pos:
             head_movement = calculate_head_movement(prev_red_pos, curr_red_pos, width, height)
+            if head_movement and frame_data:
+                frame_data[-1]['next_movement'] = head_movement
+
             if head_movement and 'horizontal' in head_movement and 'radians' in head_movement['horizontal'] and not np.isnan(head_movement['horizontal']['radians']):
                 recalculated_pos = remap_position_from_movement(prev_red_pos, head_movement, width, height)
                 if recalculated_pos:
@@ -134,23 +110,21 @@ def analyze_video_clip(
                     }
                     prediction_errors.append(prediction_error["distance"])
 
-        if frame_idx >= frozen_frame_skip:
+        if output_frame_count >= frozen_frame_skip:
             frame_info = {
-                "frame_index": global_frame_offset + frame_idx,
-                "timestamp": (global_frame_offset + frame_idx) / fps,
-                "social_category": social_category, # <-- ADDED: Include category in frame data
+                "frame_index": global_frame_offset + output_frame_count,
+                "timestamp": (global_frame_offset + output_frame_count) / fps,
+                "social_category": social_category,
                 "red_circle": {"detected": curr_red_pos is not None, "position": curr_red_pos, "radius": curr_radius},
                 "head_movement": head_movement,
+                "next_movement": None,
                 "prediction": {"recalculated_position": recalculated_pos, "error": prediction_error}
             }
             frame_data.append(frame_info)
         
+        output_frame_count += 1
+        
         if show_video or video_writer:
-            if curr_red_pos:
-                cv2.circle(vis_frame, (int(curr_red_pos[0]), int(curr_red_pos[1])), curr_radius or 5, (0, 0, 255), 2)
-            if recalculated_pos:
-                cv2.circle(vis_frame, (int(recalculated_pos[0]), int(recalculated_pos[1])), 5, (0, 255, 0), 2)
-            cv2.putText(vis_frame, f"Frame: {global_frame_offset + frame_idx}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             if video_writer:
                 video_writer.write(vis_frame)
             if show_video:
@@ -160,7 +134,7 @@ def analyze_video_clip(
         
         if curr_red_pos:
             prev_red_pos = curr_red_pos
-        frame_idx += 1
+        frame_idx_in_video += 1
         
     cap.release()
     if video_writer:
@@ -171,21 +145,19 @@ def analyze_video_clip(
     return frame_data, prediction_errors
 
 def convert_to_json_serializable(obj: Any) -> Any:
-    """Recursively converts numpy types and NaN to JSON-friendly formats."""
     if isinstance(obj, dict):
         return {k: convert_to_json_serializable(v) for k, v in obj.items()}
     if isinstance(obj, list):
         return [convert_to_json_serializable(item) for item in obj]
-    if isinstance(obj, np.integer):
+    if isinstance(obj, (np.integer, np.int_)):
         return int(obj)
-    if isinstance(obj, np.floating):
+    if isinstance(obj, (np.floating, np.float_)):
         return float(obj)
     if isinstance(obj, float) and np.isnan(obj):
         return None
     return obj
 
 def main():
-    """Main function to parse arguments and orchestrate the video processing."""
     parser = argparse.ArgumentParser(description='Analyze head movement in video clips and aggregate results.')
     parser.add_argument('input_dir', type=str, help='Directory containing the video clips to process.')
     parser.add_argument('--output_dir', '-o', type=str, default='.', help='Directory to save output JSON and video files.')
@@ -221,18 +193,21 @@ def main():
         all_frames_data = []
         all_prediction_errors = []
         
-        for video_path, info in files_with_info:
+        for i, (video_path, info) in enumerate(files_with_info):
             print(f"  - Analyzing clip: {video_path.name}")
+            
+            is_first_clip = (i == 0)
             
             output_video_file = output_path / f"{video_path.stem}_analysis.mp4" if args.save_video else None
             frozen_skip_count = 7 if args.frozen_frame else 0
-            global_offset = info['start_frame']
             
-            # <-- MODIFIED: Pass the 'social_category' from parsed info
+            global_offset = info['processed_start']
+
             clip_frames, clip_errors = analyze_video_clip(
                 video_path=video_path,
                 global_frame_offset=global_offset,
                 social_category=info['social_category'], 
+                is_first_clip_in_group=is_first_clip,
                 frozen_frame_skip=frozen_skip_count,
                 output_video_path=output_video_file,
                 fps_override=args.fps,
@@ -254,11 +229,11 @@ def main():
         
         if all_prediction_errors:
             analysis_summary["prediction_accuracy"] = {
-                "mean_error_px": float(np.mean(all_prediction_errors)),
-                "median_error_px": float(np.median(all_prediction_errors)),
-                "std_error_px": float(np.std(all_prediction_errors)),
-                "min_error_px": float(np.min(all_prediction_errors)),
-                "max_error_px": float(np.max(all_prediction_errors))
+                "mean_error_px": np.mean(all_prediction_errors),
+                "median_error_px": np.median(all_prediction_errors),
+                "std_error_px": np.std(all_prediction_errors),
+                "min_error_px": np.min(all_prediction_errors),
+                "max_error_px": np.max(all_prediction_errors)
             }
         
         output_json_path = output_path / f"{group_id}_analysis.json"
