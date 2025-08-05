@@ -139,12 +139,14 @@ if __name__ == "__main__":
     last_frame_from_previous_batch = None
     
     while start_frame < num_frames:
-        print(f"Processing frames from {start_frame} to {min(start_frame + int(fps * FRAMES_INTERVAL), num_frames)}")
-        video, end_frame = extract_frames(full_vid, FRAMES_INTERVAL, fps, start_frame, num_frames)
+        # For overlapping: if we have a previous frame, start from next frame
+        actual_start_frame = start_frame + 1 if last_frame_from_previous_batch is not None else start_frame
+        print(f"Processing frames from {actual_start_frame} to {min(actual_start_frame + int(fps * FRAMES_INTERVAL), num_frames)}")
+        video, end_frame = extract_frames(full_vid, FRAMES_INTERVAL, fps, actual_start_frame, num_frames)
         
         # Skip if no frames to process
-        if end_frame <= start_frame or len(video) == 0:
-            print(f"No frames to process in segment {start_frame} to {end_frame}, skipping...")
+        if end_frame <= actual_start_frame or len(video) == 0:
+            print(f"No frames to process in segment {actual_start_frame} to {end_frame}, skipping...")
             break
         
         if hasattr(model, 'reset'):
@@ -165,7 +167,7 @@ if __name__ == "__main__":
         window_frames = []
         if last_frame_from_previous_batch is not None:
             window_frames.append(last_frame_from_previous_batch)
-            print(f"Added last frame from previous batch for overlap (frame {start_frame - 1})")
+            print(f"Added last frame from previous batch for overlap (frame {start_frame})")
         
         is_first_step = True
         
@@ -218,10 +220,11 @@ if __name__ == "__main__":
                     break
                 red_circle = detect_red_circle(cv_frame)
                 if red_circle is None:
-                    print(f"Red circle not detected in frame {start_frame + i}. Truncating video backward.")
-                    actual_end_frame = start_frame + i
+                    print(f"Red circle not detected in frame {actual_start_frame + i}. Truncating video backward.")
+                    actual_end_frame = actual_start_frame + i
                     
-                    frames_to_keep = actual_end_frame - start_frame
+                    # i is the index in window_frames where red circle was not detected
+                    frames_to_keep = i
                     if frames_to_keep > 0:
                         truncated_window_frames = window_frames[:frames_to_keep]
                         print(f"Truncated window_frames to {frames_to_keep} frames (up to frame {actual_end_frame})")
@@ -244,15 +247,15 @@ if __name__ == "__main__":
             if len(window_frames) > 0:
                 last_frame_from_previous_batch = window_frames[-1]
             
-            # Use current end_frame as next start_frame (last_frame_from_previous_batch provides overlap)
-            start_frame = actual_end_frame
+            # Set start_frame to the last frame index for overlapping in next batch
+            start_frame = actual_end_frame - 1
         else:
             print("No tracks were predicted for this segment, skipping visualization.")
             if len(window_frames) > 0:
                 last_frame_from_previous_batch = window_frames[-1]
             
-            # Use current end_frame as next start_frame (last_frame_from_previous_batch provides overlap)
-            start_frame = end_frame
+            # Set start_frame to the last frame index for overlapping in next batch  
+            start_frame = end_frame - 1
         print(f"Processed frames from {start_frame} to {end_frame}")
 
     print(f"Processed all frames from 0 to {num_frames}")
