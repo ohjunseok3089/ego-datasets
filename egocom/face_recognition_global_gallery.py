@@ -135,7 +135,10 @@ def main(args):
             distances = 1 - np.dot(gallery_embeddings, data['embedding'])
             best_match_index = np.argmin(distances)
             
-            data['person_id'] = gallery_ids[best_match_index]
+            if distances[best_match_index] < args.recognition_threshold:
+                data['person_id'] = gallery_ids[best_match_index]
+            else:
+                data['person_id'] = 'unknown'
         
         save_outputs(video_path, video_data, args.output_dir)
 
@@ -148,7 +151,7 @@ if __name__ == "__main__":
     parser.add_argument('--search_path', type=str, required=True, help="Directory path to search for videos.")
     parser.add_argument('--pattern_to_match', type=str, required=True, help="Unique pattern to identify a group of videos (e.g., 'day_1__con_1__person_1').")
     parser.add_argument('--output_dir', type=str, default="processed_videos", help="Directory to save output files.")
-    parser.add_argument('--min_cluster_size', type=int, default=150, help="Minimum cluster size for HDBSCAN.")
+    parser.add_argument('--min_cluster_size', type=int, default=75, help="Minimum cluster size for HDBSCAN.")
     parser.add_argument('--recognition_threshold', type=float, default=0.8, help="Cosine distance threshold for recognition.")
     parser.add_argument('--execution_provider', type=str, default='CUDAExecutionProvider', help="Execution provider for ONNX Runtime (e.g., 'CoreMLExecutionProvider', 'CUDAExecutionProvider', 'CPUExecutionProvider').")
     
