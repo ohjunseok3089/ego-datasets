@@ -225,22 +225,10 @@ if __name__ == "__main__":
                 0, 3, 1, 2
             )[None]
             print("Saving video with predicted tracks...")
-
-            # Remove frozen frames from the beginning of the video
-            if len(window_frames) > FROZEN_FRAMES:
-                trimmed_window_frames = window_frames[FROZEN_FRAMES:]
-                trimmed_video_tensor = torch.tensor(np.stack(trimmed_window_frames), device=DEFAULT_DEVICE).permute(
-                    0, 3, 1, 2
-                )[None]
-                print(f"Removed first {FROZEN_FRAMES} frozen frames from video")
-            else:
-                trimmed_video_tensor = video_tensor
-                print(f"Video too short to remove {FROZEN_FRAMES} frames, using original video")
-            
             vis = Visualizer(save_dir=save_dir, pad_value=120, linewidth=3)
             output_filename = f"{seq_name}_{start_frame}_{end_frame}"
             vis.visualize(
-                trimmed_video_tensor, pred_tracks, pred_visibility, query_frame=args.grid_query_frame, filename=output_filename
+                video_tensor, pred_tracks, pred_visibility, query_frame=args.grid_query_frame, filename=output_filename
             )
             # Check for red circle detection in the saved video and truncate if necessary
             cap = cv2.VideoCapture(os.path.join(save_dir, output_filename + ".mp4"))
@@ -248,12 +236,15 @@ if __name__ == "__main__":
             i = 0
             while True:
                 ret, cv_frame = cap.read()
+                if i < FROZEN_FRAMES:
+                    i += 1
+                    continue
                 if not ret:
                     break
                 red_circle = detect_red_circle(cv_frame)
                 if red_circle is None:
                     print(f"Red circle not detected in frame {start_frame + i}. Truncating video backward.")
-                    actual_end_frame = start_frame + i
+                    actual_end_frame = start_frame + i - FROZEN_FRAMES
                     
                     frames_to_keep = actual_end_frame - start_frame
                     if frames_to_keep > 0:
