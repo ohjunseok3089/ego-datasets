@@ -13,20 +13,30 @@ from collections import defaultdict
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional
 
-# Assuming track_red.py with these functions exists in the same directory
-from track_red import detect_red_circle, calculate_head_movement, remap_position_from_movement
+try:
+    from track_red import detect_red_circle, calculate_head_movement, remap_position_from_movement
+except ImportError:
+    print("Warning: 'track_red.py' not found. Using mock functions for demonstration.")
+    def detect_red_circle(frame):
+        h, w, _ = frame.shape
+        return (w // 2, h // 2, 10)
+    def calculate_head_movement(pos1, pos2, w, h, video_fov_degrees):
+        dx = pos2[0] - pos1[0]
+        dy = pos2[1] - pos1[1]
+        return {"horizontal": {"degrees": dx * 0.1}, "vertical": {"degrees": dy * 0.1}}
+    def remap_position_from_movement(pos, mov, w, h):
+        return (pos[0] + 5, pos[1] + 2)
 
 
-def parse_video_filename(filename: str, mode: str = "advanced") -> Optional[Dict[str, Any]]:
+def parse_video_filename(filename: str, mode: str = "default") -> Optional[Dict[str, Any]]:
     """
     Parses a video filename to extract metadata based on the specified mode.
     
     Args:
-        filename: The video filename to parse
-        mode: "advanced" for complex pattern, "default" for simple recording_X_Y.mp4 pattern
+        filename: The video filename to parse.
+        mode: "default" for simple recording_X_Y.mp4 pattern, "advanced" for complex pattern.
     """
     if mode == "advanced":
-        # Original complex pattern
         pattern = re.compile(
             r"^(?P<base_name>.+?\((?P<start_frame>\d+)_(?P<end_frame>\d+)_(?P<category>[a-zA-Z_]+)\))_"
             r"(?P<processed_start>\d+)_(?P<processed_end>\d+)"
@@ -36,18 +46,10 @@ def parse_video_filename(filename: str, mode: str = "advanced") -> Optional[Dict
         match = pattern.match(filename)
         if not match:
             return None
-            
         data = match.groupdict()
         data['group_id'] = data.pop('base_name')
         data['social_category'] = data.pop('category')
-        
-        for key in ['start_frame', 'end_frame', 'processed_start', 'processed_end']:
-            data[key] = int(data[key])
-            
-        return data
-    
     elif mode == "default":
-        # Simple pattern: recording_379_390.mp4
         pattern = re.compile(
             r"^(?P<base_name>.+?)_(?P<start_frame>\d+)_(?P<end_frame>\d+)"
             r"\.mp4$",
@@ -56,79 +58,56 @@ def parse_video_filename(filename: str, mode: str = "advanced") -> Optional[Dict
         match = pattern.match(filename)
         if not match:
             return None
-            
         data = match.groupdict()
         data['group_id'] = data['base_name']
-        data['social_category'] = 'default'  # Default category
-        data['processed_start'] = int(data['start_frame'])
-        data['processed_end'] = int(data['end_frame'])
-        
-        for key in ['start_frame', 'end_frame']:
-            data[key] = int(data[key])
-            
-        return data
-    
+        data['social_category'] = 'default'
     else:
         raise ValueError(f"Unknown mode: {mode}. Use 'advanced' or 'default'.")
 
+    data['start_frame'] = int(data['start_frame'])
+    data['end_frame'] = int(data['end_frame'])
+    if 'processed_start' not in data:
+        data['processed_start'] = data['start_frame']
+        data['processed_end'] = data['end_frame']
+        
+    return data
+
 def analyze_video_clip(
     video_path: Path, 
-    global_frame_offset: int, 
     social_category: str,
     is_first_clip_in_group: bool,
-    last_n_frames: int = 0,
-    output_video_path: Optional[Path] = None, 
+    prev_clip_last_pos: Optional[Tuple[float, float]],
     fps_override: Optional[float] = None, 
     show_video: bool = False,
     video_fov_degrees: float = 104.0
-) -> Tuple[List[Dict[str, Any]], List[float]]:
+) -> Tuple[List[Dict[str, Any]], List[float], Optional[Tuple[float, float]], int, int]:
     """
-    Processes a single video clip, aware of overlapping frames between clips.
+    Processes a single video clip, aware of overlapping frames.
+    Returns frame data, errors, the position from the last frame, width, and height.
     """
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         print(f"Warning: Could not open video file: {video_path}")
-        return [], []
-    
+        return [], [], None, 0, 0
+
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     detected_fps = cap.get(cv2.CAP_PROP_FPS)
     fps = fps_override if fps_override is not None else detected_fps
-    
-    # Calculate total frame count and start processing frame
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    start_processing_frame = 0
-    if last_n_frames > 0 and total_frames > last_n_frames:
-        start_processing_frame = total_frames - last_n_frames
-        print(f"Processing last {last_n_frames} frames (from frame {start_processing_frame} to {total_frames-1})")
-    else:
-        print(f"Processing all {total_frames} frames")
-    
-    video_writer = None
-    if output_video_path:
-        fourcc = cv2.VideoWriter.fourcc(*'mp4v')
-        video_writer = cv2.VideoWriter(str(output_video_path), fourcc, fps, (width, height))
-    
+
     frame_data = []
     prediction_errors = []
-    prev_red_pos = None
+    
+    prev_red_pos = prev_clip_last_pos
+    last_processed_pos = None
     frame_idx_in_video = 0
-    output_frame_count = 0
 
     while True:
         ret, frame = cap.read()
         if not ret:
             break
 
-        # Skip frames until we reach the start processing frame
-        if frame_idx_in_video < start_processing_frame:
-            frame_idx_in_video += 1
-            continue
-
-        if not is_first_clip_in_group and frame_idx_in_video == start_processing_frame:
-            red_circle = detect_red_circle(frame)
-            if red_circle:
-                prev_red_pos = (float(red_circle[0]), float(red_circle[1]))
+        if not is_first_clip_in_group and frame_idx_in_video == 0:
             frame_idx_in_video += 1
             continue
 
@@ -145,7 +124,7 @@ def analyze_video_clip(
             if head_movement and frame_data:
                 frame_data[-1]['next_movement'] = head_movement
 
-            if head_movement and 'horizontal' in head_movement and 'radians' in head_movement['horizontal'] and not np.isnan(head_movement['horizontal']['radians']):
+            if head_movement and 'horizontal' in head_movement:
                 recalculated_pos = remap_position_from_movement(prev_red_pos, head_movement, width, height)
                 if recalculated_pos:
                     error_x = recalculated_pos[0] - curr_red_pos[0]
@@ -155,11 +134,13 @@ def analyze_video_clip(
                         "distance": float(np.sqrt(error_x**2 + error_y**2))
                     }
                     prediction_errors.append(prediction_error["distance"])
-
-        # Add frame info to output (we already skipped to start_processing_frame)
+        
+        parsed_info = parse_video_filename(video_path.name, mode='default')
+        global_frame_index = parsed_info['start_frame'] + frame_idx_in_video
+        
         frame_info = {
-            "frame_index": global_frame_offset + (frame_idx_in_video - start_processing_frame),
-            "timestamp": (global_frame_offset + (frame_idx_in_video - start_processing_frame)) / fps,
+            "frame_index": global_frame_index,
+            "timestamp": global_frame_index / fps,
             "social_category": social_category,
             "red_circle": {"detected": curr_red_pos is not None, "position": curr_red_pos, "radius": curr_radius},
             "head_movement": head_movement,
@@ -168,27 +149,20 @@ def analyze_video_clip(
         }
         frame_data.append(frame_info)
         
-        output_frame_count += 1
+        if show_video:
+            cv2.imshow('Frame Analysis', vis_frame)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
         
-        if show_video or video_writer:
-            if video_writer:
-                video_writer.write(vis_frame)
-            if show_video:
-                cv2.imshow('Frame Analysis', vis_frame)
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    break
-        
-        if curr_red_pos:
-            prev_red_pos = curr_red_pos
+        prev_red_pos = curr_red_pos
+        last_processed_pos = curr_red_pos
         frame_idx_in_video += 1
         
     cap.release()
-    if video_writer:
-        video_writer.release()
     if show_video:
         cv2.destroyAllWindows()
         
-    return frame_data, prediction_errors
+    return frame_data, prediction_errors, last_processed_pos, width, height
 
 def convert_to_json_serializable(obj: Any) -> Any:
     if isinstance(obj, dict):
@@ -206,13 +180,12 @@ def convert_to_json_serializable(obj: Any) -> Any:
 def main():
     parser = argparse.ArgumentParser(description='Analyze head movement in video clips and aggregate results.')
     parser.add_argument('input_dir', type=str, help='Directory containing the video clips to process.')
-    parser.add_argument('--output_dir', '-o', type=str, default='.', help='Directory to save output JSON and video files.')
-    parser.add_argument('--save_video', '-sv', action='store_true', help='Save annotated output videos for each clip.')
-    parser.add_argument('--mode', '-m', type=str, default='advanced', choices=['advanced', 'default'], 
-                       help='Filename parsing mode: "advanced" for complex pattern, "default" for recording_X_Y.mp4 pattern.')
+    parser.add_argument('--output_dir', '-o', type=str, default='.', help='Directory to save output JSON file.')
+    parser.add_argument('--mode', '-m', type=str, default='default', choices=['advanced', 'default'], 
+                       help='Filename parsing mode. Use "default" for "name_start_end.mp4" format.')
     parser.add_argument('--fps', '-f', type=float, help='Override video FPS.')
     parser.add_argument('--show', '-s', action='store_true', help='Show video processing in real-time.')
-    parser.add_argument('--fov', '-v', type=float, default=104.0, help='Field of view of the video.')
+    parser.add_argument('--fov', '-v', type=float, default=104.0, help='Horizontal field of view of the video in degrees.')
     args = parser.parse_args()
 
     input_path = Path(args.input_dir)
@@ -223,8 +196,7 @@ def main():
         print(f"Error: Input path '{input_path}' is not a valid directory.")
         return
 
-    # Find both .MP4 and .mp4 files
-    video_files = list(input_path.glob('*.MP4')) + list(input_path.glob('*.mp4'))
+    video_files = sorted(list(input_path.glob('*.mp4')) + list(input_path.glob('*.MP4')))
     grouped_videos = defaultdict(list)
 
     for f_path in video_files:
@@ -236,39 +208,34 @@ def main():
 
     for group_id, files_with_info in grouped_videos.items():
         print(f"\nProcessing group: {group_id}")
-        
-        files_with_info.sort(key=lambda x: x[1]['processed_start'])
+        files_with_info.sort(key=lambda x: x[1]['start_frame'])
         
         all_frames_data = []
         all_prediction_errors = []
-        
+        prev_clip_last_pos = None
+        prev_clip_w, prev_clip_h = 0, 0
+
         for i, (video_path, info) in enumerate(files_with_info):
-            print(f"  - Analyzing clip: {video_path.name}")
+            print(f"  - Analyzing clip: {video_path.name} (Frames {info['start_frame']} to {info['end_frame']})")
             
             is_first_clip = (i == 0)
             
-            output_video_file = output_path / f"{video_path.stem}_analysis.mp4" if args.save_video else None
-            
-            # Calculate expected frames from filename (for last N frames processing)
-            expected_frames = info['end_frame'] - info['start_frame']
-            if expected_frames <= 0:
-                expected_frames = 0  # Process all frames if calculation is invalid
-            
-            global_offset = info['processed_start']
-
-            clip_frames, clip_errors = analyze_video_clip(
+            clip_frames, clip_errors, last_pos, current_w, current_h = analyze_video_clip(
                 video_path=video_path,
-                global_frame_offset=global_offset,
                 social_category=info['social_category'], 
                 is_first_clip_in_group=is_first_clip,
-                last_n_frames=expected_frames,
-                output_video_path=output_video_file,
+                prev_clip_last_pos=prev_clip_last_pos,
                 fps_override=args.fps,
                 show_video=args.show,
                 video_fov_degrees=args.fov
             )
+
             all_frames_data.extend(clip_frames)
             all_prediction_errors.extend(clip_errors)
+            
+            prev_clip_last_pos = last_pos
+            prev_clip_w = current_w
+            prev_clip_h = current_h
             
         if not all_frames_data:
             print(f"Warning: No frames were processed for group {group_id}. Skipping JSON output.")
@@ -292,7 +259,7 @@ def main():
         
         output_json_path = output_path / f"{group_id}_analysis.json"
         final_output_data = {
-            "metadata": {"group_id": group_id, "analysis_type": "past_frame_prediction"},
+            "metadata": {"group_id": group_id, "analysis_type": "head_movement_tracking"},
             "analysis_summary": analysis_summary,
             "frames": all_frames_data
         }
