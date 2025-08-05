@@ -51,7 +51,7 @@ process_group() {
         echo "[GPU $gpu_id] Video path: $video_file"
 
         echo "[GPU $gpu_id] Running CoTracker on $video_basename..."
-        CUDA_VISIBLE_DEVICES=$gpu_id python main.py \
+        CUDA_VISIBLE_DEVICES=$gpu_id PYTHONPATH=.. python main.py \
             --video_path "$video_file" \
             --grid_size 30 \
             --grid_query_frame 0
@@ -87,7 +87,7 @@ for ((gpu=0; gpu<num_gpus; gpu++)); do
         echo "echo \"[GPU $gpu] Processing video: \$video_basename\"" >> $temp_script
         echo "echo \"[GPU $gpu] Video path: \$video_file\"" >> $temp_script
         echo "echo \"[GPU $gpu] Running CoTracker on \$video_basename...\"" >> $temp_script
-        echo "CUDA_VISIBLE_DEVICES=$gpu python main.py --video_path \"\$video_file\" --grid_size 30 --grid_query_frame 0" >> $temp_script
+        echo "CUDA_VISIBLE_DEVICES=$gpu PYTHONPATH=.. python main.py --video_path \"\$video_file\" --grid_size 30 --grid_query_frame 0" >> $temp_script
         echo "exit_code=\$?" >> $temp_script
         echo "if [ \$exit_code -eq 0 ]; then" >> $temp_script
         echo "  echo \"[GPU $gpu] ✓ Successfully processed \$video_basename\"" >> $temp_script
