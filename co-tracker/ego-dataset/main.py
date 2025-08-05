@@ -59,6 +59,11 @@ if __name__ == "__main__":
         default=None,
         help="path to a mask",
     )
+    parser.add_argument(
+        "--save_dir",
+        default="/mas/robots/prg-egocom/EGOCOM/720p/5min_parts/co-tracker",
+        help="base directory to save output videos",
+    )
 
     args = parser.parse_args()
 
@@ -132,7 +137,7 @@ if __name__ == "__main__":
     seq_name = os.path.splitext(os.path.basename(args.video_path))[0]
     
     # Construct the full save directory path as requested
-    save_dir = f"/mas/robots/prg-egocom/EGOCOM/720p/5min_parts/co-tracker/{seq_name}"
+    save_dir = f"{args.save_dir}/{seq_name}"
     
     # Create the directory if it doesn't exist
     os.makedirs(save_dir, exist_ok=True)

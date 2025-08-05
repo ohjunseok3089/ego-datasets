@@ -54,7 +54,8 @@ process_group() {
         CUDA_VISIBLE_DEVICES=$gpu_id PYTHONPATH=.. python main.py \
             --video_path "$video_file" \
             --grid_size 30 \
-            --grid_query_frame 0
+            --grid_query_frame 0 \
+            --save_dir "/mas/robots/prg-egocom/EGOCOM/720p/5min_parts/co-tracker"
         if [ $? -eq 0 ]; then
             echo "[GPU $gpu_id] ✓ Successfully processed $video_basename"
             ((count++))
@@ -87,7 +88,7 @@ for ((gpu=0; gpu<num_gpus; gpu++)); do
         echo "echo \"[GPU $gpu] Processing video: \$video_basename\"" >> $temp_script
         echo "echo \"[GPU $gpu] Video path: \$video_file\"" >> $temp_script
         echo "echo \"[GPU $gpu] Running CoTracker on \$video_basename...\"" >> $temp_script
-        echo "CUDA_VISIBLE_DEVICES=$gpu PYTHONPATH=.. python main.py --video_path \"\$video_file\" --grid_size 30 --grid_query_frame 0" >> $temp_script
+        echo "CUDA_VISIBLE_DEVICES=$gpu PYTHONPATH=.. python main.py --video_path \"\$video_file\" --grid_size 30 --grid_query_frame 0 --save_dir \"/mas/robots/prg-egocom/EGOCOM/720p/5min_parts/co-tracker\"" >> $temp_script
         echo "exit_code=\$?" >> $temp_script
         echo "if [ \$exit_code -eq 0 ]; then" >> $temp_script
         echo "  echo \"[GPU $gpu] ✓ Successfully processed \$video_basename\"" >> $temp_script
