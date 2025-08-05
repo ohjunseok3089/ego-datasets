@@ -193,41 +193,9 @@ if __name__ == "__main__":
 
         print("Tracks are computed.")
         
-        if pred_tracks is not None: 
-            # --- NEW LOGIC TO DYNAMICALLY REMOVE FROZEN FRAMES ---
-            num_to_trim = 0
-            if len(window_frames) > 1:
-                first_frame_np = np.asarray(window_frames[0])
-                # Find consecutive identical frames at the beginning
-                for i in range(1, len(window_frames)):
-                    if not np.array_equal(first_frame_np, np.asarray(window_frames[i])):
-                        # Keep only 1 frozen frame, trim the rest
-                        num_to_trim = i - 1 if i > 1 else 0
-                        break
-                else: # This executes if the loop completes, meaning all frames are identical.
-                    # Keep only 1 frame if all are identical
-                    num_to_trim = len(window_frames) - 1 if len(window_frames) > 1 else 0
-
-            # These are the versions trimmed at the start, for the initial visualization
-            trimmed_vis_frames = window_frames
-            trimmed_vis_tracks = pred_tracks
-            trimmed_vis_visibility = pred_visibility
-
-            if num_to_trim > 0:
-                print(f"Found {num_to_trim + 1} identical starting frames. Keeping 1, trimming {num_to_trim} for visualization.")
-                trimmed_vis_frames = window_frames[num_to_trim:]
-                trimmed_vis_tracks = pred_tracks[:, num_to_trim:]
-                trimmed_vis_visibility = pred_visibility[:, num_to_trim:]
-            else:
-                print("No consecutive identical starting frames detected.")
-
-            if not trimmed_vis_frames:
-                print("Segment is empty after trimming frozen frames. Skipping visualization.")
-                start_frame = end_frame
-                continue
-
+        if pred_tracks is not None:
             # Prepare tensor for the initial visualization
-            trimmed_video_tensor = torch.tensor(np.stack(trimmed_vis_frames), device=DEFAULT_DEVICE).permute(
+            video_tensor = torch.tensor(np.stack(window_frames), device=DEFAULT_DEVICE).permute(
                 0, 3, 1, 2
             )[None]
 
@@ -235,26 +203,66 @@ if __name__ == "__main__":
             output_filename = f"{seq_name}_{start_frame}_{end_frame}"
             print(f"Saving initial visualization to {output_filename}.mp4")
             vis.visualize(
-                trimmed_video_tensor, trimmed_vis_tracks, trimmed_vis_visibility, query_frame=args.grid_query_frame, filename=output_filename
+                video_tensor, pred_tracks, pred_visibility, query_frame=args.grid_query_frame, filename=output_filename
             )
             
-            # --- RED CIRCLE DETECTION & FINAL TRUNCATION ---
+            # --- RED CIRCLE DETECTION & FROZEN FRAME TRIMMING ---
+            # First detect and trim frozen frames based on red circle movement
+            frames_to_trim_start = 0
+            if len(window_frames) > 1:
+                first_red_circle = detect_red_circle(window_frames[0])
+                if first_red_circle is not None:
+                    first_red_pos = (float(first_red_circle[0]), float(first_red_circle[1]))
+                    # Check for stationary red circle at the beginning
+                    for i in range(1, len(window_frames)):
+                        current_red_circle = detect_red_circle(window_frames[i])
+                        if current_red_circle is not None:
+                            current_red_pos = (float(current_red_circle[0]), float(current_red_circle[1]))
+                            # If red circle moved significantly, stop trimming
+                            if abs(current_red_pos[0] - first_red_pos[0]) > 2.0 or abs(current_red_pos[1] - first_red_pos[1]) > 2.0:
+                                frames_to_trim_start = i - 1 if i > 1 else 0
+                                break
+                        else:
+                            # Red circle disappeared, stop trimming
+                            frames_to_trim_start = i - 1 if i > 1 else 0
+                            break
+                    else:
+                        # All frames have stationary red circle, keep only last frame
+                        frames_to_trim_start = len(window_frames) - 1
+            
+            # Apply frozen frame trimming
+            if frames_to_trim_start > 0:
+                print(f"Trimming {frames_to_trim_start} frozen frames from start based on red circle position.")
+                window_frames = window_frames[frames_to_trim_start:]
+                pred_tracks = pred_tracks[:, frames_to_trim_start:]
+                pred_visibility = pred_visibility[:, frames_to_trim_start:]
+                start_frame += frames_to_trim_start
+            
+            # Re-create video tensor after trimming
+            if len(window_frames) > 0:
+                video_tensor = torch.tensor(np.stack(window_frames), device=DEFAULT_DEVICE).permute(0, 3, 1, 2)[None]
+                
+                # Re-visualize with trimmed data
+                vis.visualize(
+                    video_tensor, pred_tracks, pred_visibility, query_frame=args.grid_query_frame, filename=output_filename
+                )
+            
+            # Now check for red circle disappearance for final truncation
             cap = cv2.VideoCapture(os.path.join(save_dir, output_filename + ".mp4"))
             actual_end_frame = end_frame
-            frame_idx_in_trimmed_vid = 0
+            frame_idx_in_vid = 0
             red_circle_disappeared = False
             while True:
                 ret, cv_frame = cap.read()
                 if not ret:
                     break
                 if detect_red_circle(cv_frame) is None:
-                    print(f"Red circle not detected in frame {frame_idx_in_trimmed_vid} of the visualized video. Truncating.")
-                    # Total frames to keep is the number of trimmed frames plus the index where the circle disappeared.
-                    frames_to_keep = num_to_trim + frame_idx_in_trimmed_vid
+                    print(f"Red circle not detected in frame {frame_idx_in_vid} of the visualized video. Truncating.")
+                    frames_to_keep = frame_idx_in_vid
                     actual_end_frame = start_frame + frames_to_keep
                     red_circle_disappeared = True
                     break
-                frame_idx_in_trimmed_vid += 1
+                frame_idx_in_vid += 1
             cap.release()
             
             if red_circle_disappeared:
