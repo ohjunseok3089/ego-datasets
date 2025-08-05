@@ -15,7 +15,6 @@ DEFAULT_DEVICE = (
     "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
 )
 FRAMES_INTERVAL = 0.5
-# FROZEN_FRAMES = 7 # This constant is no longer needed.
 
 def extract_video_info(video_path):
     """Extracts FPS and total number of frames from a video file."""
@@ -84,11 +83,6 @@ if __name__ == "__main__":
     print("Model moved to device.")
 
     window_frames = []
-    # Mask processing logic remains unchanged
-    # if args.mask_path is not None:
-    #     ...
-    # else:
-    #     segm_mask = None
         
     def _process_step(window_frames, is_first_step, grid_size, grid_query_frame, queries):
         """Processes a chunk of video frames with the CoTracker model."""
@@ -105,7 +99,6 @@ if __name__ == "__main__":
             grid_size=grid_size,
             grid_query_frame=grid_query_frame,
             queries=queries,
-            # segm_mask=torch.from_numpy(segm_mask)[None, None],
         )
         return result
 
@@ -151,7 +144,6 @@ if __name__ == "__main__":
         if hasattr(model, 'reset'):
             model.reset()
         else:
-            # Reinitialize the model's online processing state properly
             if hasattr(model, 'model') and hasattr(model.model, 'init_video_online_processing'):
                 model.model.init_video_online_processing()
             if hasattr(model, 'queries'):
@@ -194,30 +186,40 @@ if __name__ == "__main__":
         print("Tracks are computed.")
         
         if pred_tracks is not None: 
-            # --- NEW LOGIC TO DYNAMICALLY REMOVE FROZEN FRAMES ---
-            num_to_trim = 0
-            if len(window_frames) > 1:
-                first_frame_np = np.asarray(window_frames[0])
-                # Find the index of the first frame that is different from the very first frame.
-                for i in range(1, len(window_frames)):
-                    if not np.array_equal(first_frame_np, np.asarray(window_frames[i])):
-                        num_to_trim = i
-                        break
-                else: # This executes if the loop completes, meaning all frames are identical.
-                    num_to_trim = len(window_frames) - 1 if len(window_frames) > 0 else 0
+            # --- REVISED LOGIC TO DYNAMICALLY REMOVE FROZEN FRAMES ---
+            # `video` holds the new frames for this segment.
+            # `window_frames` is `[optional_last_frame] + video`.
 
-            # These are the versions trimmed at the start, for the initial visualization
-            trimmed_vis_frames = window_frames
-            trimmed_vis_tracks = pred_tracks
-            trimmed_vis_visibility = pred_visibility
+            # 1. Find the number of frozen frames at the start of the new segment (`video`).
+            frozen_in_video = 0
+            if len(video) > 1:
+                first_frame_of_video_np = np.asarray(video[0])
+                count = 1  # The first frame always matches itself.
+                for i in range(1, len(video)):
+                    if np.array_equal(first_frame_of_video_np, np.asarray(video[i])):
+                        count += 1
+                    else:
+                        break
+                # A "frozen sequence" must have at least 2 identical frames.
+                if count > 1:
+                    frozen_in_video = count
+            
+            # 2. Calculate the total number of frames to trim from the start of `window_frames`.
+            num_to_trim = frozen_in_video
+            if last_frame_from_previous_batch is not None:
+                # For visualization, we also trim the carry-over frame to get a clean start.
+                num_to_trim += 1
 
             if num_to_trim > 0:
-                print(f"Found {num_to_trim} identical starting frames. Trimming for initial visualization.")
+                print(f"Found {num_to_trim} static frames at the beginning. Trimming for visualization.")
                 trimmed_vis_frames = window_frames[num_to_trim:]
                 trimmed_vis_tracks = pred_tracks[:, num_to_trim:]
                 trimmed_vis_visibility = pred_visibility[:, num_to_trim:]
             else:
-                print("No identical starting frames detected.")
+                print("No static starting frames detected.")
+                trimmed_vis_frames = window_frames
+                trimmed_vis_tracks = pred_tracks
+                trimmed_vis_visibility = pred_visibility
 
             if not trimmed_vis_frames:
                 print("Segment is empty after trimming frozen frames. Skipping visualization.")
@@ -247,7 +249,6 @@ if __name__ == "__main__":
                     break
                 if detect_red_circle(cv_frame) is None:
                     print(f"Red circle not detected in frame {frame_idx_in_trimmed_vid} of the visualized video. Truncating.")
-                    # Total frames to keep is the number of trimmed frames plus the index where the circle disappeared.
                     frames_to_keep = num_to_trim + frame_idx_in_trimmed_vid
                     actual_end_frame = start_frame + frames_to_keep
                     red_circle_disappeared = True
@@ -256,12 +257,10 @@ if __name__ == "__main__":
             cap.release()
             
             if red_circle_disappeared:
-                # Remove the initial (potentially longer) video file
                 os.remove(os.path.join(save_dir, output_filename + ".mp4"))
                 print(f"Removed intermediate file: {output_filename}.mp4")
 
                 if frames_to_keep > 0:
-                    # Create the final, correctly truncated video from the *original* segment data
                     final_truncated_frames = window_frames[:frames_to_keep]
                     final_truncated_tracks = pred_tracks[:, :frames_to_keep]
                     final_truncated_visibility = pred_visibility[:, :frames_to_keep]
