@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Set the base directory path
-BASE_DIR="/mas/robots/prg-egocom/EGOCOM/720p/5min_parts/dataset/"
+BASE_DIR="/mas/robots/prg-egocom/EGOCOM/720p/5min_parts/parts/"
 
 # Check if the base directory exists
 if [ ! -d "$BASE_DIR" ]; then
@@ -10,7 +10,7 @@ if [ ! -d "$BASE_DIR" ]; then
 fi
 
 # Create output directory if it doesn't exist
-mkdir -p processed_videos
+mkdir -p /mas/robots/prg-egocom/EGOCOM/720p/5min_parts/co-tracker/
 
 echo "Starting batch processing of videos in parallel (4 GPUs)..."
 echo "Base directory: $BASE_DIR"
@@ -110,4 +110,4 @@ done
 echo "================================"
 echo "Batch processing launched in 4 parallel screen sessions!"
 echo "Use 'screen -ls' to see running sessions. Attach with 'screen -r cotracker_gpuX' (X=0,1,2,3)."
-echo "Output videos saved in: ./processed_videos/" 
+echo "Output videos saved in: /mas/robots/prg-egocom/EGOCOM/720p/5min_parts/co-tracker/" 

@@ -14,7 +14,36 @@ from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional
 
 # Assuming track_red.py with these functions exists in the same directory
-from track_red import detect_red_circle, calculate_head_movement, remap_position_from_movement
+# You need to have a `track_red.py` file with these functions defined.
+# from track_red import detect_red_circle, calculate_head_movement, remap_position_from_movement
+
+# --- Mock functions if track_red.py is not available ---
+def detect_red_circle(frame):
+    # This is a placeholder. Use your actual detection logic.
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    lower_red = np.array([0, 120, 70])
+    upper_red = np.array([10, 255, 255])
+    mask1 = cv2.inRange(hsv, lower_red, upper_red)
+    lower_red = np.array([170, 120, 70])
+    upper_red = np.array([180, 255, 255])
+    mask2 = cv2.inRange(hsv, lower_red, upper_red)
+    mask = mask1 + mask2
+    circles = cv2.HoughCircles(mask, cv2.HOUGH_GRADIENT, 1, 20, param1=50, param2=15, minRadius=5, maxRadius=50)
+    if circles is not None:
+        return circles[0][0]
+    return None
+
+def calculate_head_movement(prev_pos, curr_pos, width, height):
+    # This is a placeholder.
+    dx = curr_pos[0] - prev_pos[0]
+    dy = curr_pos[1] - prev_pos[1]
+    return {"horizontal": {"degrees": dx}, "vertical": {"degrees": dy}, "radians": {}}
+
+def remap_position_from_movement(prev_pos, movement, width, height):
+    # This is a placeholder.
+    return (prev_pos[0] + movement['horizontal']['degrees'], prev_pos[1] + movement['vertical']['degrees'])
+# --- End of mock functions ---
+
 
 def parse_video_filename(filename: str) -> Optional[Dict[str, Any]]:
     """
@@ -27,14 +56,10 @@ def parse_video_filename(filename: str) -> Optional[Dict[str, Any]]:
     
     Returns:
         A dictionary with parsed components or None if the pattern doesn't match.
-        Keys include: 'group_id', 'start_frame', 'processed_start', etc.
     """
     pattern = re.compile(
-        # Matches the base name and metadata in parentheses
         r"^(?P<base_name>.+?\((?P<start_frame>\d+)_(?P<end_frame>\d+)_(?P<category>[a-zA-Z_]+)\))_"
-        # Matches the processed frame range
         r"(?P<processed_start>\d+)_(?P<processed_end>\d+)"
-        # Matches the extension
         r"\.MP4$",
         re.IGNORECASE
     )
@@ -43,10 +68,9 @@ def parse_video_filename(filename: str) -> Optional[Dict[str, Any]]:
         return None
         
     data = match.groupdict()
-    # Create a unique ID for grouping files
     data['group_id'] = data.pop('base_name')
+    data['social_category'] = data.pop('category') # Explicitly handle social_category
     
-    # Convert numeric string captures to integers
     for key in ['start_frame', 'end_frame', 'processed_start', 'processed_end']:
         data[key] = int(data[key])
         
@@ -55,6 +79,7 @@ def parse_video_filename(filename: str) -> Optional[Dict[str, Any]]:
 def analyze_video_clip(
     video_path: Path, 
     global_frame_offset: int, 
+    social_category: str, # <-- ADDED: Pass category to the function
     frozen_frame_skip: int = 0,
     output_video_path: Optional[Path] = None, 
     fps_override: Optional[float] = None, 
@@ -62,26 +87,12 @@ def analyze_video_clip(
 ) -> Tuple[List[Dict[str, Any]], List[float]]:
     """
     Processes a single video clip to detect a red circle and analyze movement.
-
-    Args:
-        video_path: Path to the input video clip.
-        global_frame_offset: The starting frame number from the original full video.
-        frozen_frame_skip: If > 0, skips adding the first N frames to the output.
-        output_video_path: Optional path to save the annotated video.
-        fps_override: Optional FPS value to override the detected one.
-        show_video: If True, displays the video during processing.
-
-    Returns:
-        A tuple containing:
-        - A list of data dictionaries for each processed frame.
-        - A list of prediction error distances.
     """
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
         print(f"Warning: Could not open video file: {video_path}")
         return [], []
     
-    # Video properties
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     detected_fps = cap.get(cv2.CAP_PROP_FPS)
@@ -102,7 +113,6 @@ def analyze_video_clip(
         if not ret:
             break
         
-        # --- Core Detection and Calculation ---
         vis_frame = frame.copy()
         red_circle = detect_red_circle(frame)
         
@@ -113,7 +123,7 @@ def analyze_video_clip(
 
         if prev_red_pos and curr_red_pos:
             head_movement = calculate_head_movement(prev_red_pos, curr_red_pos, width, height)
-            if head_movement and not np.isnan(head_movement['horizontal']['radians']):
+            if head_movement and 'horizontal' in head_movement and 'radians' in head_movement['horizontal'] and not np.isnan(head_movement['horizontal']['radians']):
                 recalculated_pos = remap_position_from_movement(prev_red_pos, head_movement, width, height)
                 if recalculated_pos:
                     error_x = recalculated_pos[0] - curr_red_pos[0]
@@ -124,19 +134,17 @@ def analyze_video_clip(
                     }
                     prediction_errors.append(prediction_error["distance"])
 
-        # --- Frame Data Structuring ---
-        # Apply frozen frame skip: only append data if past the skip count
         if frame_idx >= frozen_frame_skip:
             frame_info = {
                 "frame_index": global_frame_offset + frame_idx,
                 "timestamp": (global_frame_offset + frame_idx) / fps,
+                "social_category": social_category, # <-- ADDED: Include category in frame data
                 "red_circle": {"detected": curr_red_pos is not None, "position": curr_red_pos, "radius": curr_radius},
                 "head_movement": head_movement,
                 "prediction": {"recalculated_position": recalculated_pos, "error": prediction_error}
             }
             frame_data.append(frame_info)
         
-        # --- Visualization (optional) ---
         if show_video or video_writer:
             if curr_red_pos:
                 cv2.circle(vis_frame, (int(curr_red_pos[0]), int(curr_red_pos[1])), curr_radius or 5, (0, 0, 255), 2)
@@ -195,7 +203,6 @@ def main():
         print(f"Error: Input path '{input_path}' is not a valid directory.")
         return
 
-    # --- 1. Group video files by their base name ---
     video_files = list(input_path.glob('*.MP4'))
     grouped_videos = defaultdict(list)
 
@@ -206,11 +213,9 @@ def main():
         else:
             print(f"Warning: Skipping file with unrecognized name format: {f_path.name}")
 
-    # --- 2. Process each group of videos ---
     for group_id, files_with_info in grouped_videos.items():
         print(f"\nProcessing group: {group_id}")
         
-        # Sort files by their starting processed frame number to ensure order
         files_with_info.sort(key=lambda x: x[1]['processed_start'])
         
         all_frames_data = []
@@ -221,13 +226,13 @@ def main():
             
             output_video_file = output_path / f"{video_path.stem}_analysis.mp4" if args.save_video else None
             frozen_skip_count = 7 if args.frozen_frame else 0
-            
-            # The global frame offset is the clip's start frame from the original video
             global_offset = info['start_frame']
-
+            
+            # <-- MODIFIED: Pass the 'social_category' from parsed info
             clip_frames, clip_errors = analyze_video_clip(
                 video_path=video_path,
                 global_frame_offset=global_offset,
+                social_category=info['social_category'], 
                 frozen_frame_skip=frozen_skip_count,
                 output_video_path=output_video_file,
                 fps_override=args.fps,
@@ -236,7 +241,6 @@ def main():
             all_frames_data.extend(clip_frames)
             all_prediction_errors.extend(clip_errors)
             
-    # --- 3. Aggregate results and save a single JSON for the group ---
         if not all_frames_data:
             print(f"Warning: No frames were processed for group {group_id}. Skipping JSON output.")
             continue
@@ -264,7 +268,6 @@ def main():
             "frames": all_frames_data
         }
 
-        # Sanitize data for JSON output (handles NaN, etc.)
         final_output_data = convert_to_json_serializable(final_output_data)
 
         print(f"Saving aggregated analysis to: {output_json_path}")

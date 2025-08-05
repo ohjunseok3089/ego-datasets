@@ -127,6 +127,16 @@ if __name__ == "__main__":
         print(f"Error processing video {args.video_path}: {e}")
         print("Skipping this video due to corruption or loading issues.")
         exit(1)
+
+    # Get the base name of the video file to use as the directory name
+    seq_name = os.path.splitext(os.path.basename(args.video_path))[0]
+    
+    # Construct the full save directory path as requested
+    save_dir = f"/mas/robots/prg-egocom/EGOCOM/720p/5min_parts/co-tracker/{seq_name}"
+    
+    # Create the directory if it doesn't exist
+    os.makedirs(save_dir, exist_ok=True)
+    print(f"Output will be saved to directory: {save_dir}")
     
     # Calculate center coordinates for queries
     frame_height, frame_width = full_vid[0].shape[:2]
@@ -205,13 +215,12 @@ if __name__ == "__main__":
         
         if pred_tracks is not None: 
             # save a video with predicted tracks
-            seq_name = os.path.splitext(os.path.basename(args.video_path))[0]
             print("Preparing video tensor for visualization...")
             video_tensor = torch.tensor(np.stack(window_frames), device=DEFAULT_DEVICE).permute(
                 0, 3, 1, 2
             )[None]
             print("Saving video with predicted tracks...")
-            save_dir = "/mas/robots/prg-egocom/EGOCOM/720p/5min_parts/dataset/saved_videos_2"
+
             # Remove frozen frames from the beginning of the video
             if len(window_frames) > FROZEN_FRAMES:
                 trimmed_window_frames = window_frames[FROZEN_FRAMES:]
