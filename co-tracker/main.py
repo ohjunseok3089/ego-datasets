@@ -15,7 +15,6 @@ DEFAULT_DEVICE = (
     "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
 )
 FRAMES_INTERVAL = 0.5
-FROZEN_FRAMES = 7
 
 def extract_video_info(video_path):
     try:
@@ -82,26 +81,6 @@ if __name__ == "__main__":
     print("Model moved to device.")
 
     window_frames = []
-    # if args.mask_path is not None:
-    #     segm_mask = np.array(Image.open(args.mask_path))
-    #     print(f"Original segm_mask shape: {segm_mask.shape}")
-    #     if segm_mask.ndim == 4:
-    #         segm_mask_gray = segm_mask[..., 0, 0] if segm_mask.shape[3] == 1 else segm_mask[..., 0]
-    #     elif segm_mask.ndim == 3 and segm_mask.shape[2] == 3:
-    #         segm_mask_gray = cv2.cvtColor(segm_mask, cv2.COLOR_RGB2GRAY)
-    #     elif segm_mask.ndim == 3 and segm_mask.shape[2] == 4:
-    #         segm_mask_gray = segm_mask[..., 0]
-    #     else:
-    #         segm_mask_gray = segm_mask
-
-    #     segm_mask_model = cv2.resize(segm_mask_gray, (512, 384))  
-    #     print(f"Model input mask shape: {segm_mask_model.shape}")
-
-    #     segm_mask = segm_mask_model
-    #     print("Mask processed.")
-    # else:
-    #     segm_mask = None
-    #     print("No mask provided.")
         
     def _process_step(window_frames, is_first_step, grid_size, grid_query_frame, queries):
         video_chunk = (
@@ -216,7 +195,6 @@ if __name__ == "__main__":
             print("_process_step for final frames completed.")
 
         print("Tracks are computed")
-        # TODO : Delete frozen frame
         
         if pred_tracks is not None: 
             # save a video with predicted tracks
@@ -236,15 +214,12 @@ if __name__ == "__main__":
             i = 0
             while True:
                 ret, cv_frame = cap.read()
-                if i < FROZEN_FRAMES:
-                    i += 1
-                    continue
                 if not ret:
                     break
                 red_circle = detect_red_circle(cv_frame)
                 if red_circle is None:
                     print(f"Red circle not detected in frame {start_frame + i}. Truncating video backward.")
-                    actual_end_frame = start_frame + i - FROZEN_FRAMES
+                    actual_end_frame = start_frame + i
                     
                     frames_to_keep = actual_end_frame - start_frame
                     if frames_to_keep > 0:
@@ -269,12 +244,14 @@ if __name__ == "__main__":
             if len(window_frames) > 0:
                 last_frame_from_previous_batch = window_frames[-1]
             
+            # Use current end_frame as next start_frame (last_frame_from_previous_batch provides overlap)
             start_frame = actual_end_frame
         else:
             print("No tracks were predicted for this segment, skipping visualization.")
             if len(window_frames) > 0:
                 last_frame_from_previous_batch = window_frames[-1]
             
+            # Use current end_frame as next start_frame (last_frame_from_previous_batch provides overlap)
             start_frame = end_frame
         print(f"Processed frames from {start_frame} to {end_frame}")
 
