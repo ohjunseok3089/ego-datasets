@@ -15,6 +15,7 @@ DEFAULT_DEVICE = (
     "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
 )
 FRAMES_INTERVAL = 0.5
+# FROZEN_FRAMES = 7 # This constant is no longer needed.
 
 def extract_video_info(video_path):
     """Extracts FPS and total number of frames from a video file."""
@@ -147,7 +148,18 @@ if __name__ == "__main__":
             break
         
         # Reset model state for the new segment
-        model.reset()
+        if hasattr(model, 'reset'):
+            model.reset()
+        else:
+            # Reinitialize the model's online processing state properly
+            if hasattr(model, 'model') and hasattr(model.model, 'init_video_online_processing'):
+                model.model.init_video_online_processing()
+            if hasattr(model, 'queries'):
+                delattr(model, 'queries')
+            if hasattr(model, 'N'):
+                delattr(model, 'N')
+            if hasattr(model, 'model') and hasattr(model.model, 'reset'):
+                model.model.reset()
         print("Model state reset for this segment.")
         
         window_frames = []
@@ -182,6 +194,7 @@ if __name__ == "__main__":
         print("Tracks are computed.")
         
         if pred_tracks is not None: 
+            # --- NEW LOGIC TO DYNAMICALLY REMOVE FROZEN FRAMES ---
             num_to_trim = 0
             if len(window_frames) > 1:
                 first_frame_np = np.asarray(window_frames[0])
