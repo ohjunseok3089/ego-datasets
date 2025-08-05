@@ -17,35 +17,66 @@ from typing import List, Dict, Any, Tuple, Optional
 from track_red import detect_red_circle, calculate_head_movement, remap_position_from_movement
 
 
-def parse_video_filename(filename: str) -> Optional[Dict[str, Any]]:
+def parse_video_filename(filename: str, mode: str = "advanced") -> Optional[Dict[str, Any]]:
     """
-    Parses a video filename to extract metadata based on a specific pattern.
-    """
-    pattern = re.compile(
-        r"^(?P<base_name>.+?\((?P<start_frame>\d+)_(?P<end_frame>\d+)_(?P<category>[a-zA-Z_]+)\))_"
-        r"(?P<processed_start>\d+)_(?P<processed_end>\d+)"
-        r"\.MP4$",
-        re.IGNORECASE
-    )
-    match = pattern.match(filename)
-    if not match:
-        return None
-        
-    data = match.groupdict()
-    data['group_id'] = data.pop('base_name')
-    data['social_category'] = data.pop('category')
+    Parses a video filename to extract metadata based on the specified mode.
     
-    for key in ['start_frame', 'end_frame', 'processed_start', 'processed_end']:
-        data[key] = int(data[key])
+    Args:
+        filename: The video filename to parse
+        mode: "advanced" for complex pattern, "default" for simple recording_X_Y.mp4 pattern
+    """
+    if mode == "advanced":
+        # Original complex pattern
+        pattern = re.compile(
+            r"^(?P<base_name>.+?\((?P<start_frame>\d+)_(?P<end_frame>\d+)_(?P<category>[a-zA-Z_]+)\))_"
+            r"(?P<processed_start>\d+)_(?P<processed_end>\d+)"
+            r"\.MP4$",
+            re.IGNORECASE
+        )
+        match = pattern.match(filename)
+        if not match:
+            return None
+            
+        data = match.groupdict()
+        data['group_id'] = data.pop('base_name')
+        data['social_category'] = data.pop('category')
         
-    return data
+        for key in ['start_frame', 'end_frame', 'processed_start', 'processed_end']:
+            data[key] = int(data[key])
+            
+        return data
+    
+    elif mode == "default":
+        # Simple pattern: recording_379_390.mp4
+        pattern = re.compile(
+            r"^(?P<base_name>.+?)_(?P<start_frame>\d+)_(?P<end_frame>\d+)"
+            r"\.mp4$",
+            re.IGNORECASE
+        )
+        match = pattern.match(filename)
+        if not match:
+            return None
+            
+        data = match.groupdict()
+        data['group_id'] = data['base_name']
+        data['social_category'] = 'default'  # Default category
+        data['processed_start'] = int(data['start_frame'])
+        data['processed_end'] = int(data['end_frame'])
+        
+        for key in ['start_frame', 'end_frame']:
+            data[key] = int(data[key])
+            
+        return data
+    
+    else:
+        raise ValueError(f"Unknown mode: {mode}. Use 'advanced' or 'default'.")
 
 def analyze_video_clip(
     video_path: Path, 
     global_frame_offset: int, 
     social_category: str,
     is_first_clip_in_group: bool,
-    frozen_frame_skip: int = 0,
+    last_n_frames: int = 0,
     output_video_path: Optional[Path] = None, 
     fps_override: Optional[float] = None, 
     show_video: bool = False
@@ -63,6 +94,15 @@ def analyze_video_clip(
     detected_fps = cap.get(cv2.CAP_PROP_FPS)
     fps = fps_override if fps_override is not None else detected_fps
     
+    # Calculate total frame count and start processing frame
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    start_processing_frame = 0
+    if last_n_frames > 0 and total_frames > last_n_frames:
+        start_processing_frame = total_frames - last_n_frames
+        print(f"Processing last {last_n_frames} frames (from frame {start_processing_frame} to {total_frames-1})")
+    else:
+        print(f"Processing all {total_frames} frames")
+    
     video_writer = None
     if output_video_path:
         fourcc = cv2.VideoWriter.fourcc(*'mp4v')
@@ -79,7 +119,12 @@ def analyze_video_clip(
         if not ret:
             break
 
-        if not is_first_clip_in_group and frame_idx_in_video == 0:
+        # Skip frames until we reach the start processing frame
+        if frame_idx_in_video < start_processing_frame:
+            frame_idx_in_video += 1
+            continue
+
+        if not is_first_clip_in_group and frame_idx_in_video == start_processing_frame:
             red_circle = detect_red_circle(frame)
             if red_circle:
                 prev_red_pos = (float(red_circle[0]), float(red_circle[1]))
@@ -110,17 +155,17 @@ def analyze_video_clip(
                     }
                     prediction_errors.append(prediction_error["distance"])
 
-        if output_frame_count >= frozen_frame_skip:
-            frame_info = {
-                "frame_index": global_frame_offset + output_frame_count,
-                "timestamp": (global_frame_offset + output_frame_count) / fps,
-                "social_category": social_category,
-                "red_circle": {"detected": curr_red_pos is not None, "position": curr_red_pos, "radius": curr_radius},
-                "head_movement": head_movement,
-                "next_movement": None,
-                "prediction": {"recalculated_position": recalculated_pos, "error": prediction_error}
-            }
-            frame_data.append(frame_info)
+        # Add frame info to output (we already skipped to start_processing_frame)
+        frame_info = {
+            "frame_index": global_frame_offset + (frame_idx_in_video - start_processing_frame),
+            "timestamp": (global_frame_offset + (frame_idx_in_video - start_processing_frame)) / fps,
+            "social_category": social_category,
+            "red_circle": {"detected": curr_red_pos is not None, "position": curr_red_pos, "radius": curr_radius},
+            "head_movement": head_movement,
+            "next_movement": None,
+            "prediction": {"recalculated_position": recalculated_pos, "error": prediction_error}
+        }
+        frame_data.append(frame_info)
         
         output_frame_count += 1
         
@@ -162,7 +207,8 @@ def main():
     parser.add_argument('input_dir', type=str, help='Directory containing the video clips to process.')
     parser.add_argument('--output_dir', '-o', type=str, default='.', help='Directory to save output JSON and video files.')
     parser.add_argument('--save_video', '-sv', action='store_true', help='Save annotated output videos for each clip.')
-    parser.add_argument('--frozen_frame', action='store_true', help='Ignore the first 7 frames of each clip in the JSON output.')
+    parser.add_argument('--mode', '-m', type=str, default='advanced', choices=['advanced', 'default'], 
+                       help='Filename parsing mode: "advanced" for complex pattern, "default" for recording_X_Y.mp4 pattern.')
     parser.add_argument('--fps', '-f', type=float, help='Override video FPS.')
     parser.add_argument('--show', '-s', action='store_true', help='Show video processing in real-time.')
     args = parser.parse_args()
@@ -175,11 +221,12 @@ def main():
         print(f"Error: Input path '{input_path}' is not a valid directory.")
         return
 
-    video_files = list(input_path.glob('*.MP4'))
+    # Find both .MP4 and .mp4 files
+    video_files = list(input_path.glob('*.MP4')) + list(input_path.glob('*.mp4'))
     grouped_videos = defaultdict(list)
 
     for f_path in video_files:
-        parsed_info = parse_video_filename(f_path.name)
+        parsed_info = parse_video_filename(f_path.name, mode=args.mode)
         if parsed_info:
             grouped_videos[parsed_info['group_id']].append((f_path, parsed_info))
         else:
@@ -199,7 +246,11 @@ def main():
             is_first_clip = (i == 0)
             
             output_video_file = output_path / f"{video_path.stem}_analysis.mp4" if args.save_video else None
-            frozen_skip_count = 7 if args.frozen_frame else 0
+            
+            # Calculate expected frames from filename (for last N frames processing)
+            expected_frames = info['end_frame'] - info['start_frame']
+            if expected_frames <= 0:
+                expected_frames = 0  # Process all frames if calculation is invalid
             
             global_offset = info['processed_start']
 
@@ -208,7 +259,7 @@ def main():
                 global_frame_offset=global_offset,
                 social_category=info['social_category'], 
                 is_first_clip_in_group=is_first_clip,
-                frozen_frame_skip=frozen_skip_count,
+                last_n_frames=expected_frames,
                 output_video_path=output_video_file,
                 fps_override=args.fps,
                 show_video=args.show
