@@ -240,15 +240,12 @@ if __name__ == "__main__":
             i = 0
             while True:
                 ret, cv_frame = cap.read()
-                if i < FROZEN_FRAMES: 
-                    i += 1
-                    continue
                 if not ret:
                     break
                 red_circle = detect_red_circle(cv_frame)
                 if red_circle is None:
                     print(f"Red circle not detected in frame {start_frame + i}. Truncating video backward.")
-                    actual_end_frame = start_frame + i - FROZEN_FRAMES
+                    actual_end_frame = start_frame + i
                     
                     frames_to_keep = actual_end_frame - start_frame
                     if frames_to_keep > 0:
