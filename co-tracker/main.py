@@ -226,13 +226,22 @@ if __name__ == "__main__":
                     # i is the index in window_frames where red circle was not detected
                     frames_to_keep = i
                     if frames_to_keep > 0:
-                        truncated_window_frames = window_frames[:frames_to_keep]
-                        print(f"Truncated window_frames to {frames_to_keep} frames (up to frame {actual_end_frame})")
+                        # CoTracker uses model.step * 2 frames for processing, so we need to account for frozen frames
+                        # The actual processed frames are the last model.step * 2 frames from window_frames
+                        frozen_frames = model.step * 2
+                        actual_processed_frames = min(frames_to_keep, frozen_frames)
+                        
+                        # Take the last actual_processed_frames from window_frames up to frames_to_keep
+                        start_idx = max(0, frames_to_keep - actual_processed_frames)
+                        truncated_window_frames = window_frames[start_idx:frames_to_keep]
+                        
+                        print(f"Truncated window_frames: kept {len(truncated_window_frames)} frames (frames {start_idx} to {frames_to_keep-1}) out of {frames_to_keep} total frames")
+                        print(f"Accounted for frozen frames: {frozen_frames} frames used by CoTracker")
                         
                         truncated_video_tensor = torch.tensor(np.stack(truncated_window_frames), device=DEFAULT_DEVICE).permute(
                             0, 3, 1, 2
                         )[None]
-                        new_output_filename = f"{seq_name}_{start_frame}_{actual_end_frame}.mp4"
+                        new_output_filename = f"{seq_name}_{start_frame}_{actual_end_frame}"
                         vis.visualize(
                             truncated_video_tensor, pred_tracks, pred_visibility, query_frame=args.grid_query_frame, filename=new_output_filename
                         )
