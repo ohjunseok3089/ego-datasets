@@ -229,9 +229,9 @@ if __name__ == "__main__":
                         # The actual processed frames are the last model.step * 2 frames from window_frames
                         frozen_frames = model.step * 2
                         processed_frames = frozen_frames - len(window_frames)
-                        actual_processed_frames = i - processed_frames
+                        actual_processed_frames = i - processed_frames - 1
                         
-                        actual_end_frame = actual_start_frame + actual_processed_frames - 2
+                        actual_end_frame = actual_start_frame + actual_processed_frames
                         truncated_window_frames = window_frames[:actual_processed_frames]
                         
                         print(f"Truncated window_frames: kept {len(truncated_window_frames)} frames (frames {actual_processed_frames} to {frames_to_keep-1}) out of {frames_to_keep} total frames")
