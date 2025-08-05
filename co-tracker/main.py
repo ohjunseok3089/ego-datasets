@@ -214,6 +214,7 @@ if __name__ == "__main__":
             cap = cv2.VideoCapture(os.path.join(save_dir, output_filename + ".mp4"))
             actual_end_frame = end_frame
             i = 0
+            print(f"window_frames: {len(window_frames)}")
             while True:
                 ret, cv_frame = cap.read()
                 if not ret:
@@ -229,6 +230,7 @@ if __name__ == "__main__":
                         # CoTracker uses model.step * 2 frames for processing, so we need to account for frozen frames
                         # The actual processed frames are the last model.step * 2 frames from window_frames
                         frozen_frames = model.step * 2
+                        # processed_frames = frozen_frames - len(window_frames)
                         actual_processed_frames = min(frames_to_keep, frozen_frames)
                         
                         # Take the last actual_processed_frames from window_frames up to frames_to_keep
