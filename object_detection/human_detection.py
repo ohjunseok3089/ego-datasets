@@ -38,27 +38,27 @@ def process_video_with_yolo(video_path, output_video_path, output_csv_path):
             break
         
         # run inference
-        results = model(frame, stream=True, verbose=False)
+        results = model(frame, classes=0, stream=True, verbose=False)
         
         for result in results:
             for box in result.boxes:
                 class_id = int(box.cls[0])
                 class_name = model.names[class_id]
-                if class_name == "person":
-                    x1, y1, x2, y2 = map(int, box.xyxy[0])
-                    confidence = float(box.conf[0])
-                    detection_results.apped({
-                        'frame': frame_number,
-                        'class_name': class_name,
-                        'confidence': f"{confidence:.2f}",
-                        'x1': x1,
-                        'y1': y1,
-                        'x2': x2,
-                        'y2': y2
-                    })
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    label = f"{class_name} {confidence:.2f}"
-                    cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2) 
+                # if class_name == "person":
+                x1, y1, x2, y2 = map(int, box.xyxy[0])
+                confidence = float(box.conf[0])
+                detection_results.append({
+                    'frame': frame_number,
+                    'class_name': class_name,
+                    'confidence': f"{confidence:.2f}",
+                    'x1': x1,
+                    'y1': y1,
+                    'x2': x2,
+                    'y2': y2
+                })
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                label = f"{class_name} {confidence:.2f}"
+                cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2) 
         
         # write frame to output video
         out.write(frame)
