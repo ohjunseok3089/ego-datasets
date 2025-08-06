@@ -42,14 +42,12 @@ def parse_video_path(video_path):
     if not os.path.isfile(video_path):
         raise FileNotFoundError(f"Input video path not found or is not a file: {video_path}")
 
-    # --- Extract Path Components ---
     video_filename_w_ext = os.path.basename(video_path)
     video_filename_no_ext = os.path.splitext(video_filename_w_ext)[0]
     parts_dir = os.path.dirname(video_path)
     duration_dir = os.path.dirname(parts_dir)
     p720_dir = os.path.dirname(duration_dir)
 
-    # --- Construct File Paths ---
     paths = {}
 
     paths['angular_json_path'] = os.path.join(duration_dir, 'co-tracker', video_filename_w_ext, f"{video_filename_no_ext}_analysis.json")
