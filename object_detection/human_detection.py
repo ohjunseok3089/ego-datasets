@@ -52,8 +52,8 @@ def map_to_ground_truth(detection_results, face_recognition_csv_path):
         # Look for face detections in nearby frames (±5 frames tolerance)
         frame_tolerance = 5
         nearby_faces = face_df[
-            (face_df['frame'] >= body_frame - frame_tolerance) & 
-            (face_df['frame'] <= body_frame + frame_tolerance)
+            (face_df['frame_number'] >= body_frame - frame_tolerance) & 
+            (face_df['frame_number'] <= body_frame + frame_tolerance)
         ]
         
         for _, face_row in nearby_faces.iterrows():
@@ -120,8 +120,8 @@ def apply_global_mapping(detection_results, face_df):
         # Look for face detections in nearby frames (±10 frames for more coverage)
         frame_tolerance = 10
         nearby_faces = face_df[
-            (face_df['frame'] >= body_frame - frame_tolerance) & 
-            (face_df['frame'] <= body_frame + frame_tolerance)
+            (face_df['frame_number'] >= body_frame - frame_tolerance) & 
+            (face_df['frame_number'] <= body_frame + frame_tolerance)
         ]
         
         for _, face_row in nearby_faces.iterrows():
@@ -231,6 +231,7 @@ def process_video_with_yolo(video_path, output_video_path, output_csv_path, face
         try:
             face_df = pd.read_csv(face_csv_path)
             print(f"Loaded face recognition data: {len(face_df)} records")
+            print(f"Face CSV columns: {list(face_df.columns)}")
         except Exception as e:
             print(f"Error loading face recognition data: {e}")
             face_df = None
