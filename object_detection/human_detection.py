@@ -38,7 +38,7 @@ def process_video_with_yolo(video_path, output_video_path, output_csv_path):
             break
         
         # run inference
-        results = model(frame, classes=0, stream=True, verbose=False)
+        results = model(frame, classes=0, conf=0.5, stream=True, verbose=False)
         
         for result in results:
             for box in result.boxes:
