@@ -89,7 +89,7 @@ if __name__ == "__main__":
     output_dir = args.output
     
     os.makedirs(output_dir, exist_ok=True)
-    video_filename_base = os.path.basename(input_path)
+    video_filename_base = os.path.splitext(os.path.basename(input_path))[0]
     output_video_path = os.path.join(output_dir, f"{video_filename_base}_detected.mp4")
     output_csv_path = os.path.join(output_dir, f"{video_filename_base}_detections.csv")
     
