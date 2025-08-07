@@ -33,27 +33,37 @@ def process_video_with_yolo(video_path, output_video_path, output_csv_path):
         if not ret:
             break
         
-        results = model(frame, classes=0, conf=0.5, stream=True, verbose=False)
+        results = model.track(frame, classes=0, conf=0.5, verbose=False, persist=True)
         
-        i = 0
         for result in results:
-            for box in result.boxes[:3]: # EGOCOM only needs 3 detections.
-                class_id = int(box.cls.item())
-                class_name = model.names[class_id] + f"_{i}"
-                i += 1
-                x1, y1, x2, y2 = map(int, box.xyxy[0])
-                confidence = float(box.conf.item())
+            if result.boxes is not None and len(result.boxes) > 0:
+                # Sort by confidence and take top 3
+                boxes_with_conf = [(box, float(box.conf.item())) for box in result.boxes]
+                boxes_with_conf.sort(key=lambda x: x[1], reverse=True)
                 
-                detection_results.append({
-                    'frame': frame_number,
-                    'class_name': class_name,
-                    'confidence': f"{confidence:.2f}",
-                    'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2
-                })
-                
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                label = f"{class_name} {confidence:.2f}"
-                cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2) 
+                for box, confidence in boxes_with_conf[:3]: # EGOCOM only needs 3 detections.
+                    class_id = int(box.cls.item())
+                    class_name = model.names[class_id]
+                    
+                    # Use track_id if available, otherwise use a fallback
+                    if hasattr(box, 'id') and box.id is not None:
+                        track_id = int(box.id.item())
+                        person_label = f"{class_name}_id_{track_id}"
+                    else:
+                        person_label = f"{class_name}_no_id"
+                    
+                    x1, y1, x2, y2 = map(int, box.xyxy[0])
+                    
+                    detection_results.append({
+                        'frame': frame_number,
+                        'class_name': person_label,
+                        'confidence': f"{confidence:.2f}",
+                        'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2
+                    })
+                    
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    label = f"{person_label} {confidence:.2f}"
+                    cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2) 
         
         out.write(frame)
         
