@@ -69,6 +69,55 @@ if __name__ == "__main__":
     if not os.path.isfile(args.video_path):
         raise ValueError("Video file does not exist")
 
+    # Get the base name of the video file to check if already processed
+    seq_name = os.path.splitext(os.path.basename(args.video_path))[0]
+    save_dir = f"{args.save_dir}/{seq_name}"
+    
+    # Check if this video has already been fully processed
+    if os.path.exists(save_dir):
+        existing_files = [f for f in os.listdir(save_dir) if f.endswith('.mp4')]
+        if len(existing_files) > 0:
+            # Extract frame ranges from existing files to check completion
+            processed_frames = []
+            for file in existing_files:
+                # Extract start_end pattern from filename
+                parts = file.replace('.mp4', '').split('_')
+                if len(parts) >= 3:
+                    try:
+                        start_frame = int(parts[-2])
+                        end_frame = int(parts[-1])
+                        processed_frames.extend(range(start_frame, end_frame))
+                    except ValueError:
+                        continue
+            
+            # Quick check of total video length to see if processing is complete
+            try:
+                cap = cv2.VideoCapture(args.video_path)
+                if cap.isOpened():
+                    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                    cap.release()
+                    
+                    # If we have processed at least 90% of frames, consider it complete
+                    coverage = len(set(processed_frames)) / total_frames if total_frames > 0 else 0
+                    
+                    if coverage >= 0.9:
+                        print(f"Video {seq_name} already processed with {len(existing_files)} output files ({coverage:.1%} coverage)")
+                        print("Skipping this video. Delete the output directory to reprocess.")
+                        exit(0)
+                    else:
+                        print(f"Video {seq_name} partially processed ({coverage:.1%} coverage), restarting from beginning...")
+                        # Remove incomplete processing results
+                        import shutil
+                        shutil.rmtree(save_dir)
+                else:
+                    print(f"Cannot verify completion for {seq_name}, reprocessing...")
+                    import shutil 
+                    shutil.rmtree(save_dir)
+            except Exception as e:
+                print(f"Error checking completion for {seq_name}: {e}, reprocessing...")
+                import shutil
+                shutil.rmtree(save_dir)
+
     print("Loading model...")
     if args.checkpoint is not None:
         model = CoTrackerOnlinePredictor(checkpoint=args.checkpoint)
@@ -102,23 +151,46 @@ if __name__ == "__main__":
 
 
     try:
-        fps, num_frames = extract_video_info(args.video_path)
-        full_vid = read_video_from_path(args.video_path)
+        # Try opencv first, then fallback to imageio
+        print("Attempting to read video with OpenCV...")
+        cap = cv2.VideoCapture(args.video_path)
+        if not cap.isOpened():
+            raise ValueError("OpenCV failed to open video")
         
-        if full_vid is None or len(full_vid) == 0:
-            raise ValueError("Failed to load video or video is empty")
-    except Exception as e:
-        print(f"Error processing video {args.video_path}: {e}")
-        print("Skipping this video due to corruption or loading issues.")
-        exit(1)
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        num_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        
+        frames = []
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frames.append(frame)
+        cap.release()
+        
+        if len(frames) == 0:
+            raise ValueError("No frames extracted from video")
+            
+        full_vid = np.stack(frames)
+        print(f"Successfully loaded video with OpenCV: {len(frames)} frames at {fps} FPS")
+        
+    except Exception as cv_error:
+        print(f"OpenCV failed: {cv_error}")
+        print("Falling back to imageio...")
+        try:
+            fps, num_frames = extract_video_info(args.video_path)
+            full_vid = read_video_from_path(args.video_path)
+            
+            if full_vid is None or len(full_vid) == 0:
+                raise ValueError("Failed to load video or video is empty")
+            print(f"Successfully loaded video with imageio: {len(full_vid)} frames at {fps} FPS")
+        except Exception as e:
+            print(f"Both OpenCV and imageio failed to process video {args.video_path}: {e}")
+            print("Skipping this video due to corruption or loading issues.")
+            exit(1)
 
-    # Get the base name of the video file to use as the directory name
-    seq_name = os.path.splitext(os.path.basename(args.video_path))[0]
-    
-    # Construct the full save directory path as requested
-    save_dir = f"{args.save_dir}/{seq_name}"
-    
-    # Create the directory if it doesn't exist
+    # Create the directory if it doesn't exist (seq_name and save_dir already defined above)
     os.makedirs(save_dir, exist_ok=True)
     print(f"Output will be saved to directory: {save_dir}")
     

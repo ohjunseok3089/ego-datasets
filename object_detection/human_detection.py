@@ -235,8 +235,8 @@ def recreate_video_with_mapped_labels(input_video_path, output_video_path, detec
             for detection in frame_detections[frame_number]:
                 person_label = detection['class_name']
                 
-                # Only draw if it's a mapped person (not person_id_X)
-                if not person_label.startswith('person_id_'):
+                # Only draw if it's a mapped person (not person_id_X or person_no_id)
+                if not person_label.startswith('person_id_') and not person_label.startswith('person_no_id'):
                     x1, y1, x2, y2 = detection['x1'], detection['y1'], detection['x2'], detection['y2']
                     confidence = detection['confidence']
                     
@@ -350,10 +350,10 @@ def process_video_with_yolo(video_path, output_video_path, output_csv_path, face
         # Re-create the video with updated labels
         recreate_video_with_mapped_labels(video_path, output_video_path, detection_results, model, device)
         
-        # Filter to only include mapped persons (exclude person_id_X)
+        # Filter to only include mapped persons (exclude person_id_X and person_no_id)
         filtered_results = [
             result for result in detection_results 
-            if not result['class_name'].startswith('person_id_')
+            if not result['class_name'].startswith('person_id_') and not result['class_name'].startswith('person_no_id')
         ]
         
         df = pd.DataFrame(filtered_results)
