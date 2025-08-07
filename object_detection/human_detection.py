@@ -33,7 +33,7 @@ def process_video_with_yolo(video_path, output_video_path, output_csv_path):
         if not ret:
             break
         
-        results = model.track(frame, classes=0, conf=0.5, verbose=False, persist=True)
+        results = model.track(frame, classes=0, conf=0.5, verbose=False, persist=True, tracker="bytetrack.yaml")
         
         for result in results:
             if result.boxes is not None and len(result.boxes) > 0:
