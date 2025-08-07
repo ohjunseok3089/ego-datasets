@@ -95,7 +95,7 @@ def map_to_ground_truth(detection_results, face_recognition_csv_path):
         updated_result = result.copy()
         if result['class_name'] in final_mapping:
             mapped_person_id = final_mapping[result['class_name']]
-            updated_result['class_name'] = f"person_{mapped_person_id}"
+            updated_result['class_name'] = f"{mapped_person_id}"
         
         updated_results.append(updated_result)
     
@@ -197,7 +197,7 @@ def apply_global_mapping(detection_results, face_df):
         updated_result = result.copy()
         if result['class_name'] in final_mapping:
             mapped_person_id = final_mapping[result['class_name']]
-            updated_result['class_name'] = f"person_{mapped_person_id}"
+            updated_result['class_name'] = f"{mapped_person_id}"
         
         updated_results.append(updated_result)
     
