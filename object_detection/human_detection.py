@@ -74,7 +74,6 @@ def process_video_with_yolo(video_path, output_video_path, output_csv_path):
             
     cap.release()
     out.release()
-    cv2.destroyAllWindows()
     
     if detection_results:
         df = pd.DataFrame(detection_results)
