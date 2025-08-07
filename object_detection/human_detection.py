@@ -4,6 +4,8 @@ from ultralytics import YOLO
 import torch
 import argparse
 import os
+import numpy as np
+from strongsort.strong_sort import StrongSORT
 
 def process_video_with_yolo(video_path, output_video_path, output_csv_path):
     model = YOLO("yolo12x.pt")
@@ -12,6 +14,13 @@ def process_video_with_yolo(video_path, output_video_path, output_csv_path):
     print(f"Using device: {device}")
     
     model.to(device)
+    
+    # Initialize StrongSORT tracker
+    strong_sort = StrongSORT(
+        model_weights='osnet_x0_25_msmt17.pt',
+        device=device,
+        fp16=True
+    )
     
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -34,37 +43,48 @@ def process_video_with_yolo(video_path, output_video_path, output_csv_path):
         if not ret:
             break
         
-        results = model.track(frame, classes=0, conf=0.5, verbose=False, persist=True, tracker="strongsort.yaml")
+        # Get YOLO detections (detection only, no tracking)
+        results = model(frame, classes=0, conf=0.5, verbose=False)
         
+        # Prepare detections for StrongSORT
+        detections = []
         for result in results:
             if result.boxes is not None and len(result.boxes) > 0:
-                # Sort by confidence and take top 3
                 boxes_with_conf = [(box, float(box.conf.item())) for box in result.boxes]
                 boxes_with_conf.sort(key=lambda x: x[1], reverse=True)
                 
-                for box, confidence in boxes_with_conf[:3]: # EGOCOM only needs 3 detections.
-                    class_id = int(box.cls.item())
-                    class_name = model.names[class_id]
-                    
-                    # Use track_id from StrongSORT
-                    if hasattr(box, 'id') and box.id is not None:
-                        track_id = int(box.id.item())
-                        person_label = f"{class_name}_id_{track_id}"
-                    else:
-                        person_label = f"{class_name}_no_id"
-                    
-                    x1, y1, x2, y2 = map(int, box.xyxy[0])
-                    
-                    detection_results.append({
-                        'frame': frame_number,
-                        'class_name': person_label,
-                        'confidence': f"{confidence:.2f}",
-                        'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2
-                    })
-                    
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    label = f"{person_label} {confidence:.2f}"
-                    cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2) 
+                for box, confidence in boxes_with_conf[:3]: # EGOCOM only needs 3 detections
+                    x1, y1, x2, y2 = map(float, box.xyxy[0])
+                    # StrongSORT expects [x1, y1, x2, y2, conf, class_id]
+                    detections.append([x1, y1, x2, y2, confidence, 0])  # class_id=0 for person
+        
+        # Convert to numpy array
+        if detections:
+            detections = np.array(detections)
+            # Update StrongSORT tracker
+            tracks = strong_sort.update(detections, frame)
+            
+            # Process tracked objects
+            for track in tracks:
+                x1, y1, x2, y2, track_id = map(int, track[:5])
+                confidence = track[4] if len(track) > 4 else 0.0
+                
+                class_name = "person"
+                person_label = f"{class_name}_id_{track_id}"
+                
+                detection_results.append({
+                    'frame': frame_number,
+                    'class_name': person_label,
+                    'confidence': f"{confidence:.2f}",
+                    'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2
+                })
+                
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                label = f"{person_label} {confidence:.2f}"
+                cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        else:
+            # No detections, still need to update tracker
+            tracks = strong_sort.update(np.empty((0, 6)), frame) 
         
         out.write(frame)
         
