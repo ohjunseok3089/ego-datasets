@@ -51,18 +51,13 @@ def process_video_with_yolo(video_path, output_video_path, output_csv_path):
     detection_results = []
     frame_number = 0
     
-    # Track previous frame detections for IoU matching
-    prev_detections = []
-    next_track_id = 1
     
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
             break
         
-        results = model(frame, classes=0, conf=0.5, stream=True, verbose=False)
-        
-        current_detections = []
+        results = model.track(frame, classes=0, conf=0.5, verbose=False, persist=True, tracker="strongsort.yaml")
         
         for result in results:
             if result.boxes is not None and len(result.boxes) > 0:
@@ -73,36 +68,15 @@ def process_video_with_yolo(video_path, output_video_path, output_csv_path):
                 for box, confidence in boxes_with_conf[:3]: # EGOCOM only needs 3 detections.
                     class_id = int(box.cls.item())
                     class_name = model.names[class_id]
-                    x1, y1, x2, y2 = map(int, box.xyxy[0])
                     
-                    current_box = (x1, y1, x2, y2)
-                    
-                    # Find best match with previous frame using IoU
-                    best_match_id = None
-                    best_iou = 0
-                    iou_threshold = 0.3  # Adjust this threshold as needed
-                    
-                    for prev_det in prev_detections:
-                        prev_box = (prev_det['x1'], prev_det['y1'], prev_det['x2'], prev_det['y2'])
-                        iou = calculate_iou(current_box, prev_box)
-                        if iou > best_iou and iou > iou_threshold:
-                            best_iou = iou
-                            best_match_id = prev_det['track_id']
-                    
-                    # Assign track ID
-                    if best_match_id is not None:
-                        track_id = best_match_id
+                    # Use track_id from StrongSORT
+                    if hasattr(box, 'id') and box.id is not None:
+                        track_id = int(box.id.item())
+                        person_label = f"{class_name}_id_{track_id}"
                     else:
-                        track_id = next_track_id
-                        next_track_id += 1
+                        person_label = f"{class_name}_no_id"
                     
-                    person_label = f"{class_name}_id_{track_id}"
-                    
-                    current_detections.append({
-                        'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2,
-                        'track_id': track_id,
-                        'confidence': confidence
-                    })
+                    x1, y1, x2, y2 = map(int, box.xyxy[0])
                     
                     detection_results.append({
                         'frame': frame_number,
@@ -113,10 +87,7 @@ def process_video_with_yolo(video_path, output_video_path, output_csv_path):
                     
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                     label = f"{person_label} {confidence:.2f}"
-                    cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-        
-        # Update previous detections for next frame
-        prev_detections = current_detections 
+                    cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2) 
         
         out.write(frame)
         
