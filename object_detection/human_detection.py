@@ -119,14 +119,14 @@ def is_face_inside_body(face_box, body_box):
     if not (body_x1 <= face_center_x <= body_x2):
         return False
     
-    # Check if face is in upper portion of body (top 40% of body height)
-    upper_body_limit = body_y1 + (body_height * 0.4)
+    # Check if face is in upper portion of body (top 60% of body height - more lenient)
+    upper_body_limit = body_y1 + (body_height * 0.6)
     if not (body_y1 <= face_center_y <= upper_body_limit):
         return False
     
-    # Additional check: face should have reasonable overlap with body
+    # Additional check: face should have reasonable overlap with body (more lenient)
     iou = calculate_iou(face_box, body_box)
-    if iou < 0.01:  # Very minimal overlap required
+    if iou < 0.005:  # More lenient overlap requirement
         return False
     
     return True
@@ -148,8 +148,8 @@ def apply_global_mapping(detection_results, face_df):
         body_box = [body_row['x1'], body_row['y1'], body_row['x2'], body_row['y2']]
         body_track_id = body_row['class_name']
         
-        # Look for face detections in nearby frames (±3 frames for accuracy)
-        frame_tolerance = 3
+        # Look for face detections in nearby frames (±7 frames for better coverage)
+        frame_tolerance = 7
         nearby_faces = face_df[
             (face_df['frame_number'] >= body_frame - frame_tolerance) & 
             (face_df['frame_number'] <= body_frame + frame_tolerance)
@@ -179,28 +179,17 @@ def apply_global_mapping(detection_results, face_df):
             match_count = data['matches']
             frame_count = len(data['frames'])
             
-            # Require significant evidence: at least 5 matches across at least 3 different frames
-            if match_count >= 5 and frame_count >= 3:
+            # More lenient requirements: at least 3 matches across at least 2 different frames
+            if match_count >= 3 and frame_count >= 2:
                 if match_count > best_match_count:
                     best_person = person_id
                     best_match_count = match_count
                     best_frame_count = frame_count
         
-        # Additional validation: ensure this person doesn't conflict with other tracks
+        # More lenient conflict resolution - allow multiple tracks per person
         if best_person:
-            # Check if this person is already strongly mapped to another track
-            conflict = False
-            for other_track, other_mapping in final_mapping.items():
-                if other_mapping == best_person:
-                    # Check which track has stronger evidence
-                    other_matches = max([data['matches'] for data in track_mapping[other_track].values()])
-                    if other_matches > best_match_count:
-                        conflict = True
-                        break
-            
-            if not conflict:
-                final_mapping[body_track_id] = best_person
-                print(f"Global mapping: {body_track_id} -> person_{best_person} ({best_match_count} matches across {best_frame_count} frames)")
+            final_mapping[body_track_id] = best_person
+            print(f"Global mapping: {body_track_id} -> person_{best_person} ({best_match_count} matches across {best_frame_count} frames)")
     
     # Update ALL detection results with global mapping
     updated_results = []
