@@ -7,7 +7,7 @@ import os
 
 def process_video_with_yolo(video_path, output_video_path, output_csv_path):
     # Load the YOLO model
-    model = YOLO("yolov11x.pt") # nano model for real-time performance, extra large model for accuracy
+    model = YOLO("yolo11x.pt") # nano model for real-time performance, extra large model for accuracy
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
