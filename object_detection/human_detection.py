@@ -4,8 +4,105 @@ from ultralytics import YOLO
 import torch
 import argparse
 import os
+from collections import defaultdict
 
-def process_video_with_yolo(video_path, output_video_path, output_csv_path):
+def calculate_iou(box1, box2):
+    """Calculate Intersection over Union (IoU) between two bounding boxes"""
+    x1_1, y1_1, x2_1, y2_1 = box1
+    x1_2, y1_2, x2_2, y2_2 = box2
+    
+    # Calculate intersection
+    x1_i = max(x1_1, x1_2)
+    y1_i = max(y1_1, y1_2)
+    x2_i = min(x2_1, x2_2)
+    y2_i = min(y2_1, y2_2)
+    
+    if x2_i <= x1_i or y2_i <= y1_i:
+        return 0.0
+    
+    intersection = (x2_i - x1_i) * (y2_i - y1_i)
+    area1 = (x2_1 - x1_1) * (y2_1 - y1_1)
+    area2 = (x2_2 - x1_2) * (y2_2 - y1_2)
+    union = area1 + area2 - intersection
+    
+    return intersection / union if union > 0 else 0.0
+
+def map_to_ground_truth(detection_results, face_recognition_csv_path):
+    """Map human detection results to ground truth face recognition data"""
+    try:
+        face_df = pd.read_csv(face_recognition_csv_path)
+        print(f"Loaded face recognition data: {len(face_df)} records")
+    except FileNotFoundError:
+        print(f"Face recognition file not found: {face_recognition_csv_path}")
+        return detection_results
+    
+    # Create mapping from body detections to face detections
+    person_mapping = defaultdict(list)  # body_track_id -> list of (face_person_id, iou_score, frame_count)
+    
+    detection_df = pd.DataFrame(detection_results)
+    
+    for _, body_row in detection_df.iterrows():
+        if 'person_id_' not in body_row['class_name']:
+            continue
+            
+        body_frame = body_row['frame']
+        body_box = [body_row['x1'], body_row['y1'], body_row['x2'], body_row['y2']]
+        body_track_id = body_row['class_name']
+        
+        # Look for face detections in nearby frames (±5 frames tolerance)
+        frame_tolerance = 5
+        nearby_faces = face_df[
+            (face_df['frame'] >= body_frame - frame_tolerance) & 
+            (face_df['frame'] <= body_frame + frame_tolerance)
+        ]
+        
+        for _, face_row in nearby_faces.iterrows():
+            face_box = [face_row['x1'], face_row['y1'], face_row['x2'], face_row['y2']]
+            iou = calculate_iou(body_box, face_box)
+            
+            if iou > 0.1:  # Minimum overlap threshold
+                face_person_id = face_row['person_id']
+                person_mapping[body_track_id].append((face_person_id, iou, 1))
+    
+    # Determine best mapping for each body track based on majority overlap
+    final_mapping = {}
+    for body_track_id, matches in person_mapping.items():
+        if not matches:
+            continue
+            
+        # Group by face_person_id and sum IoU scores
+        person_scores = defaultdict(lambda: {'total_iou': 0, 'count': 0})
+        for face_person_id, iou, count in matches:
+            person_scores[face_person_id]['total_iou'] += iou
+            person_scores[face_person_id]['count'] += count
+        
+        # Find person with highest average IoU and sufficient overlap
+        best_person = None
+        best_score = 0
+        for person_id, data in person_scores.items():
+            avg_iou = data['total_iou'] / data['count']
+            if data['count'] >= 3 and avg_iou > best_score:  # Require at least 3 overlapping frames
+                best_person = person_id
+                best_score = avg_iou
+        
+        if best_person:
+            final_mapping[body_track_id] = best_person
+            print(f"Mapped {body_track_id} -> person_{best_person} (avg IoU: {best_score:.3f})")
+    
+    # Update detection results with mapped person IDs
+    updated_results = []
+    for result in detection_results:
+        updated_result = result.copy()
+        if result['class_name'] in final_mapping:
+            mapped_person_id = final_mapping[result['class_name']]
+            updated_result['class_name'] = f"person_{mapped_person_id}"
+        
+        updated_results.append(updated_result)
+    
+    print(f"Mapped {len(final_mapping)} body tracks to face recognition IDs")
+    return updated_results
+
+def process_video_with_yolo(video_path, output_video_path, output_csv_path, face_csv_path=None):
     try:
         model = YOLO("yolo11x.pt") 
     except Exception as e:
@@ -76,6 +173,10 @@ def process_video_with_yolo(video_path, output_video_path, output_csv_path):
     out.release()
     
     if detection_results:
+        # Map to ground truth if face recognition data is provided
+        if face_csv_path and os.path.exists(face_csv_path):
+            detection_results = map_to_ground_truth(detection_results, face_csv_path)
+        
         df = pd.DataFrame(detection_results)
         df.to_csv(output_csv_path, index=False)
         print(f"Detection results saved to {output_csv_path}")
@@ -96,4 +197,8 @@ if __name__ == "__main__":
     output_video_path = os.path.join(output_dir, f"{video_filename_base}_detected.mp4")
     output_csv_path = os.path.join(output_dir, f"{video_filename_base}_detections.csv")
     
-    process_video_with_yolo(input_path, output_video_path, output_csv_path)
+    # Construct face recognition CSV path
+    input_dir = os.path.dirname(input_path)
+    face_csv_path = os.path.join(input_dir, "processed_face_recognition_videos", f"{video_filename_base}_global_gallery.csv")
+    
+    process_video_with_yolo(input_path, output_video_path, output_csv_path, face_csv_path)
