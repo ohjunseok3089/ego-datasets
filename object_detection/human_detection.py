@@ -230,16 +230,19 @@ def recreate_video_with_mapped_labels(input_video_path, output_video_path, detec
         if not ret:
             break
         
-        # Draw detections for this frame with mapped labels
+        # Draw only mapped detections (exclude person_id_X labels)
         if frame_number in frame_detections:
             for detection in frame_detections[frame_number]:
-                x1, y1, x2, y2 = detection['x1'], detection['y1'], detection['x2'], detection['y2']
-                confidence = detection['confidence']
                 person_label = detection['class_name']
                 
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                label = f"{person_label} {confidence}"
-                cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                # Only draw if it's a mapped person (not person_id_X)
+                if not person_label.startswith('person_id_'):
+                    x1, y1, x2, y2 = detection['x1'], detection['y1'], detection['x2'], detection['y2']
+                    confidence = detection['confidence']
+                    
+                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                    label = f"{person_label} {confidence}"
+                    cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
         
         out.write(frame)
         frame_number += 1
@@ -347,9 +350,15 @@ def process_video_with_yolo(video_path, output_video_path, output_csv_path, face
         # Re-create the video with updated labels
         recreate_video_with_mapped_labels(video_path, output_video_path, detection_results, model, device)
         
-        df = pd.DataFrame(detection_results)
+        # Filter to only include mapped persons (exclude person_id_X)
+        filtered_results = [
+            result for result in detection_results 
+            if not result['class_name'].startswith('person_id_')
+        ]
+        
+        df = pd.DataFrame(filtered_results)
         df.to_csv(output_csv_path, index=False)
-        print(f"Detection results saved to {output_csv_path}")
+        print(f"Detection results saved to {output_csv_path} ({len(filtered_results)} mapped detections out of {len(detection_results)} total)")
     else:
         print("No person detections found in the video")
         
