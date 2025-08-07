@@ -36,10 +36,11 @@ def process_video_with_yolo(video_path, output_video_path, output_csv_path):
         results = model(frame, classes=0, conf=0.7, stream=True, verbose=False)
         
         for result in results:
+            i = 0
             for box in result.boxes[:3]: # EGOCOM only needs 3 detections.
                 class_id = int(box.cls.item())
-                class_name = model.names[class_id]
-                
+                class_name = model.names[class_id] + f"_{i}"
+                i += 1
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
                 confidence = float(box.conf.item())
                 
