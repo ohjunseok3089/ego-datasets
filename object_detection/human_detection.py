@@ -1,12 +1,9 @@
 import cv2
 import pandas as pd
+from ultralytics import YOLO
 import torch
 import argparse
 import os
-import numpy as np
-
-from ultralytics import YOLO
-from strongsort import StrongSort
 
 def process_video_with_yolo(video_path, output_video_path, output_csv_path):
     model = YOLO("yolo12x.pt")
@@ -15,9 +12,6 @@ def process_video_with_yolo(video_path, output_video_path, output_csv_path):
     print(f"Using device: {device}")
     
     model.to(device)
-    
-    # Initialize StrongSort tracker
-    tracker = StrongSort()
     
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -40,42 +34,26 @@ def process_video_with_yolo(video_path, output_video_path, output_csv_path):
         if not ret:
             break
         
-        results = model(frame, classes=0, conf=0.5, verbose=False)
+        results = model.track(frame, classes=0, conf=0.5, verbose=False, persist=True, tracker="strongsort.yaml")
         
-        # Make detections like the example
-        boxes = []
-        scores = []
         for result in results:
             if result.boxes is not None and len(result.boxes) > 0:
-                for box in result.boxes:
-                    class_id = int(box.cls.item())
-                    if class_id == 0:  # Only person class
-                        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
-                        w, h = x2 - x1, y2 - y1
-                        confidence = float(box.conf.item())
-                        boxes.append([x1, y1, w, h])  # [x, y, w, h] format like example
-                        scores.append(confidence)
-        
-        # Update tracker with detections
-        if boxes:
-            boxes = np.array(boxes)
-            scores = np.array(scores)
-            tracks = tracker.update(boxes, scores, frame)
-            
-            # Sort tracks by confidence and take top 3
-            if len(tracks) > 0:
-                tracks_sorted = sorted(tracks, key=lambda x: x[4], reverse=True)
+                # Sort by confidence and take top 3
+                boxes_with_conf = [(box, float(box.conf.item())) for box in result.boxes]
+                boxes_with_conf.sort(key=lambda x: x[1], reverse=True)
                 
-                for track in tracks_sorted[:3]:  # EGOCOM only needs 3 detections
-                    x1, y1, x2, y2, track_id = track
-                    x1, y1, x2, y2 = map(int, [x1, y1, x2, y2])
-                    track_id = int(track_id)
+                for box, confidence in boxes_with_conf[:3]: # EGOCOM only needs 3 detections.
+                    class_id = int(box.cls.item())
+                    class_name = model.names[class_id]
                     
-                    # Find confidence for this track (approximate)
-                    confidence = 0.8  # Default confidence since tracks may not preserve exact conf
+                    # Use track_id from StrongSORT
+                    if hasattr(box, 'id') and box.id is not None:
+                        track_id = int(box.id.item())
+                        person_label = f"{class_name}_id_{track_id}"
+                    else:
+                        person_label = f"{class_name}_no_id"
                     
-                    class_name = model.names[0]  # person
-                    person_label = f"{class_name}_id_{track_id}"
+                    x1, y1, x2, y2 = map(int, box.xyxy[0])
                     
                     detection_results.append({
                         'frame': frame_number,
@@ -86,10 +64,7 @@ def process_video_with_yolo(video_path, output_video_path, output_csv_path):
                     
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                     label = f"{person_label} {confidence:.2f}"
-                    cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-        else:
-            # Update tracker with empty detections to handle disappearances
-            tracker.update(np.empty((0, 4)), np.empty((0,)), frame) 
+                    cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2) 
         
         out.write(frame)
         
