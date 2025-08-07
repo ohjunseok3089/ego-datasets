@@ -4,6 +4,8 @@ from ultralytics import YOLO
 import torch
 import argparse
 import os
+import numpy as np
+from strongsort import StrongSORT
 
 def calculate_iou(box1, box2):
     """Calculate Intersection over Union (IoU) of two bounding boxes"""
@@ -36,6 +38,9 @@ def process_video_with_yolo(video_path, output_video_path, output_csv_path):
     
     model.to(device)
     
+    # Initialize StrongSORT tracker
+    tracker = StrongSORT(model_weights='osnet_x1_0', device=device, fp16=True)
+    
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         print(f"Error: Could not open video file {video_path}")
@@ -57,37 +62,48 @@ def process_video_with_yolo(video_path, output_video_path, output_csv_path):
         if not ret:
             break
         
-        results = model.track(frame, classes=0, conf=0.5, verbose=False, persist=True, tracker="strongsort.yaml")
+        results = model(frame, classes=0, conf=0.5, verbose=False)
         
+        detections = []
         for result in results:
             if result.boxes is not None and len(result.boxes) > 0:
-                # Sort by confidence and take top 3
-                boxes_with_conf = [(box, float(box.conf.item())) for box in result.boxes]
-                boxes_with_conf.sort(key=lambda x: x[1], reverse=True)
-                
-                for box, confidence in boxes_with_conf[:3]: # EGOCOM only needs 3 detections.
+                for box in result.boxes:
                     class_id = int(box.cls.item())
-                    class_name = model.names[class_id]
-                    
-                    # Use track_id from StrongSORT
-                    if hasattr(box, 'id') and box.id is not None:
-                        track_id = int(box.id.item())
-                        person_label = f"{class_name}_id_{track_id}"
-                    else:
-                        person_label = f"{class_name}_no_id"
-                    
-                    x1, y1, x2, y2 = map(int, box.xyxy[0])
-                    
-                    detection_results.append({
-                        'frame': frame_number,
-                        'class_name': person_label,
-                        'confidence': f"{confidence:.2f}",
-                        'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2
-                    })
-                    
-                    cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                    label = f"{person_label} {confidence:.2f}"
-                    cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2) 
+                    if class_id == 0:  # Only person class
+                        x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
+                        confidence = float(box.conf.item())
+                        detections.append([x1, y1, x2, y2, confidence])
+        
+        # Update tracker with detections
+        if detections:
+            detections = np.array(detections)
+            tracks = tracker.update(detections, frame)
+            
+            # Sort tracks by confidence and take top 3
+            tracks_with_conf = [(track, track[4]) for track in tracks]
+            tracks_with_conf.sort(key=lambda x: x[1], reverse=True)
+            
+            for track, confidence in tracks_with_conf[:3]:  # EGOCOM only needs 3 detections
+                x1, y1, x2, y2, conf, track_id = track
+                x1, y1, x2, y2 = map(int, [x1, y1, x2, y2])
+                track_id = int(track_id)
+                
+                class_name = model.names[0]  # person
+                person_label = f"{class_name}_id_{track_id}"
+                
+                detection_results.append({
+                    'frame': frame_number,
+                    'class_name': person_label,
+                    'confidence': f"{confidence:.2f}",
+                    'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2
+                })
+                
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                label = f"{person_label} {confidence:.2f}"
+                cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        else:
+            # Update tracker with empty detections to handle disappearances
+            tracker.update(np.empty((0, 5)), frame) 
         
         out.write(frame)
         
