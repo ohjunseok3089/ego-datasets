@@ -16,18 +16,11 @@ def process_video_with_yolo(video_path, output_video_path, output_csv_path):
     model.to(device)
     
     # Initialize StrongSORT tracker
-    try:
-        strong_sort = StrongSORT(
-            model_weights='osnet_x0_25_msmt17',
-            device=device,
-            fp16=False
-        )
-    except:
-        # Fallback to default model
-        strong_sort = StrongSORT(
-            device=device,
-            fp16=False
-        )
+    strong_sort = StrongSORT(
+        model_weights='./osnet_x0_25_msmt17.pt',
+        device=device,
+        fp16=True
+    )
     
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
