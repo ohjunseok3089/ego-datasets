@@ -15,11 +15,14 @@ def process_video_with_yolo(video_path, output_video_path, output_csv_path):
     
     model.to(device)
     
-    # Initialize StrongSORT tracker
+    # Initialize StrongSORT tracker with absolute path
+    model_weights_path = os.path.abspath('osnet_x0_25_msmt17.pt')
+    print(f"Using model weights: {model_weights_path}")
+    
     strong_sort = StrongSORT(
-        model_weights='./osnet_x0_25_msmt17.pt',
+        model_weights=model_weights_path,
         device=device,
-        fp16=True
+        fp16=False
     )
     
     cap = cv2.VideoCapture(video_path)
