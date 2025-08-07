@@ -102,6 +102,116 @@ def map_to_ground_truth(detection_results, face_recognition_csv_path):
     print(f"Mapped {len(final_mapping)} body tracks to face recognition IDs")
     return updated_results
 
+def apply_global_mapping(detection_results, face_df):
+    """Apply global mapping based on all available face-body overlaps"""
+    track_mapping = defaultdict(lambda: defaultdict(lambda: {'total_iou': 0, 'count': 0}))
+    
+    detection_df = pd.DataFrame(detection_results)
+    
+    # Collect all overlaps across all frames
+    for _, body_row in detection_df.iterrows():
+        if 'person_id_' not in body_row['class_name']:
+            continue
+            
+        body_frame = body_row['frame']
+        body_box = [body_row['x1'], body_row['y1'], body_row['x2'], body_row['y2']]
+        body_track_id = body_row['class_name']
+        
+        # Look for face detections in nearby frames (±10 frames for more coverage)
+        frame_tolerance = 10
+        nearby_faces = face_df[
+            (face_df['frame'] >= body_frame - frame_tolerance) & 
+            (face_df['frame'] <= body_frame + frame_tolerance)
+        ]
+        
+        for _, face_row in nearby_faces.iterrows():
+            face_box = [face_row['x1'], face_row['y1'], face_row['x2'], face_row['y2']]
+            iou = calculate_iou(body_box, face_box)
+            
+            if iou > 0.05:  # Lower threshold for more matches
+                face_person_id = face_row['person_id']
+                track_mapping[body_track_id][face_person_id]['total_iou'] += iou
+                track_mapping[body_track_id][face_person_id]['count'] += 1
+    
+    # Determine final mapping for each track
+    final_mapping = {}
+    for body_track_id, person_scores in track_mapping.items():
+        best_person = None
+        best_score = 0
+        
+        for person_id, data in person_scores.items():
+            avg_iou = data['total_iou'] / data['count']
+            # Weight by both average IoU and number of overlaps
+            weighted_score = avg_iou * min(data['count'] / 5.0, 1.0)  # Normalize count contribution
+            
+            if data['count'] >= 2 and weighted_score > best_score:
+                best_person = person_id
+                best_score = weighted_score
+        
+        if best_person:
+            final_mapping[body_track_id] = best_person
+            print(f"Global mapping: {body_track_id} -> person_{best_person} (score: {best_score:.3f})")
+    
+    # Update ALL detection results with global mapping
+    updated_results = []
+    for result in detection_results:
+        updated_result = result.copy()
+        if result['class_name'] in final_mapping:
+            mapped_person_id = final_mapping[result['class_name']]
+            updated_result['class_name'] = f"person_{mapped_person_id}"
+        
+        updated_results.append(updated_result)
+    
+    print(f"Applied global mapping to {len(final_mapping)} tracks")
+    return updated_results
+
+def recreate_video_with_mapped_labels(input_video_path, output_video_path, detection_results, model, device):
+    """Recreate the video with the globally mapped labels"""
+    print("Recreating video with mapped labels...")
+    
+    cap = cv2.VideoCapture(input_video_path)
+    if not cap.isOpened():
+        print(f"Error: Could not reopen video file {input_video_path}")
+        return
+    
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    out = cv2.VideoWriter(output_video_path, fourcc, fps, (width, height))
+    
+    # Create frame-indexed detection results
+    frame_detections = defaultdict(list)
+    for result in detection_results:
+        frame_detections[result['frame']].append(result)
+    
+    frame_number = 0
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+        
+        # Draw detections for this frame with mapped labels
+        if frame_number in frame_detections:
+            for detection in frame_detections[frame_number]:
+                x1, y1, x2, y2 = detection['x1'], detection['y1'], detection['x2'], detection['y2']
+                confidence = detection['confidence']
+                person_label = detection['class_name']
+                
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                label = f"{person_label} {confidence}"
+                cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        
+        out.write(frame)
+        frame_number += 1
+        
+        if frame_number % 1000 == 0:
+            print(f"Recreated {frame_number} frames")
+    
+    cap.release()
+    out.release()
+    print("Video recreation completed with mapped labels")
+
 def process_video_with_yolo(video_path, output_video_path, output_csv_path, face_csv_path=None):
     try:
         model = YOLO("yolo11x.pt") 
@@ -113,6 +223,17 @@ def process_video_with_yolo(video_path, output_video_path, output_csv_path, face
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
     model.to(device)
+    
+    # Load face recognition data for real-time mapping
+    face_df = None
+    track_to_person_mapping = {}
+    if face_csv_path and os.path.exists(face_csv_path):
+        try:
+            face_df = pd.read_csv(face_csv_path)
+            print(f"Loaded face recognition data: {len(face_df)} records")
+        except Exception as e:
+            print(f"Error loading face recognition data: {e}")
+            face_df = None
     
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -127,6 +248,11 @@ def process_video_with_yolo(video_path, output_video_path, output_csv_path, face
     
     detection_results = []
     frame_number = 0
+    
+    # Store all detections with original track IDs first, map globally at the end
+    def get_current_label(track_id):
+        """Get current label - will be updated globally at the end"""
+        return f"person_id_{track_id}"
     
     while cap.isOpened():
         ret, frame = cap.read()
@@ -144,13 +270,14 @@ def process_video_with_yolo(video_path, output_video_path, output_csv_path, face
                     class_id = int(box.cls.item())
                     class_name = model.names[class_id]
                     
+                    x1, y1, x2, y2 = map(int, box.xyxy[0])
+                    body_box = [x1, y1, x2, y2]
+                    
                     if hasattr(box, 'id') and box.id is not None:
                         track_id = int(box.id.item())
-                        person_label = f"{class_name}_id_{track_id}"
+                        person_label = get_current_label(track_id)
                     else:
                         person_label = f"{class_name}_no_id"
-                    
-                    x1, y1, x2, y2 = map(int, box.xyxy[0])
                     
                     detection_results.append({
                         'frame': frame_number,
@@ -173,9 +300,12 @@ def process_video_with_yolo(video_path, output_video_path, output_csv_path, face
     out.release()
     
     if detection_results:
-        # Map to ground truth if face recognition data is provided
-        if face_csv_path and os.path.exists(face_csv_path):
-            detection_results = map_to_ground_truth(detection_results, face_csv_path)
+        # Apply global mapping to all detection results
+        if face_df is not None:
+            detection_results = apply_global_mapping(detection_results, face_df)
+            
+        # Re-create the video with updated labels
+        recreate_video_with_mapped_labels(video_path, output_video_path, detection_results, model, device)
         
         df = pd.DataFrame(detection_results)
         df.to_csv(output_csv_path, index=False)
