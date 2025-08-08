@@ -14,7 +14,9 @@ from cotracker.predictor import CoTrackerOnlinePredictor
 DEFAULT_DEVICE = (
     "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
 )
-FRAMES_INTERVAL = 10
+
+FRAMES_INTERVAL = 15
+FROZEN_FRAMES = 7
 
 def extract_video_info(video_path):
     try:
@@ -212,8 +214,8 @@ if __name__ == "__main__":
     while start_frame < num_frames:
         # Overlap handled by advancing start_frame to previous end - 1; no manual carryover frame
         actual_start_frame = start_frame
-        print(f"Processing frames from {actual_start_frame} to {min(actual_start_frame + int(fps * FRAMES_INTERVAL), num_frames)}")
-        video, end_frame = extract_frames(full_vid, FRAMES_INTERVAL, fps, actual_start_frame, num_frames)
+        print(f"Processing frames from {actual_start_frame} to {min(actual_start_frame + FRAMES_INTERVAL + 1, num_frames)}")
+        video, end_frame = extract_frames(full_vid, FRAMES_INTERVAL + 1, actual_start_frame, num_frames)
         
         # Skip if no frames to process
         if end_frame <= actual_start_frame or len(video) == 0:
@@ -274,13 +276,43 @@ if __name__ == "__main__":
             )[None]
             print("Saving video with predicted tracks...")
             vis = Visualizer(save_dir=save_dir, pad_value=120, linewidth=3)
-            output_filename = f"{seq_name}_{start_frame}_{end_frame}"
+            output_filename = f"{seq_name}_{start_frame}_{end_frame - 1}"
             vis.visualize(
                 video_tensor, pred_tracks, pred_visibility, query_frame=args.grid_query_frame, filename=output_filename
             )
             # Post-process the saved video in-place without re-visualizing:
             output_path = os.path.join(save_dir, output_filename + ".mp4")
             cap = cv2.VideoCapture(output_path)
+            out_fps = cap.get(cv2.CAP_PROP_FPS)
+            if out_fps is None or out_fps <= 0:
+                out_fps = fps
+            frames = []
+            i = 0
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                if i < FROZEN_FRAMES:
+                    i += 1
+                    continue
+                red_circle = detect_red_circle(frame)
+                if red_circle is None:
+                    os.remove(output_path)
+                    end_frame = start_frame + i - FROZEN_FRAMES - 1
+                    output_filename = f"{seq_name}_{start_frame}_{end_frame}"
+                    output_path = os.path.join(save_dir, output_filename + ".mp4")
+                    break
+                frames.append(frame)
+                i += 1
+            cap.release()
+            if len(frames) > 0:
+                height, width = frames[0].shape[:2]
+                fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                writer = cv2.VideoWriter(output_path, fourcc, out_fps, (width, height))
+                for f in frames:
+                    writer.write(f)
+                writer.release()
+                
         #     actual_end_frame = end_frame
         #     kept_frames = []
         #     i = 0
@@ -322,7 +354,7 @@ if __name__ == "__main__":
         #     else:
         #         print("No frames kept after trimming; keeping original output.")
             
-        #     start_frame = actual_end_frame - 1
+            start_frame = end_frame - 2
         # else:
         #     print("No tracks were predicted for this segment, skipping visualization.")
         #     # Ensure forward progress to avoid infinite loops at the end
