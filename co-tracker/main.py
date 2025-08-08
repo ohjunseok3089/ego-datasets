@@ -14,7 +14,9 @@ from cotracker.predictor import CoTrackerOnlinePredictor
 DEFAULT_DEVICE = (
     "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
 )
-FRAMES_INTERVAL = 0.5
+
+FRAMES_INTERVAL = 15
+FROZEN_FRAMES = 7
 
 def extract_video_info(video_path):
     try:
@@ -27,9 +29,8 @@ def extract_video_info(video_path):
         print(f"Error loading video {video_path}: {e}")
         raise ValueError(f"Failed to load video: {video_path}")
 
-def extract_frames(video, seconds, fps, start_frame, num_frames):
-    frames_to_extract = int(fps * seconds)
-    end_frame = start_frame + frames_to_extract
+def extract_frames(video, frames_to_extract, start_frame, num_frames):
+    end_frame = start_frame + frames_to_extract + 1
     if end_frame > num_frames:
         end_frame = num_frames
     video = video[start_frame:end_frame]
@@ -211,10 +212,10 @@ if __name__ == "__main__":
     last_frame_from_previous_batch = None
     
     while start_frame < num_frames:
-        # For overlapping: if we have a previous frame, start from next frame
-        actual_start_frame = start_frame + 1 if last_frame_from_previous_batch is not None else start_frame
-        print(f"Processing frames from {actual_start_frame} to {min(actual_start_frame + int(fps * FRAMES_INTERVAL), num_frames)}")
-        video, end_frame = extract_frames(full_vid, FRAMES_INTERVAL, fps, actual_start_frame, num_frames)
+        # Overlap handled by advancing start_frame to previous end - 1; no manual carryover frame
+        actual_start_frame = start_frame
+        print(f"Processing frames from {actual_start_frame} to {min(actual_start_frame + FRAMES_INTERVAL - 1, num_frames)}")
+        video, end_frame = extract_frames(full_vid, FRAMES_INTERVAL, actual_start_frame, num_frames)
         
         # Skip if no frames to process
         if end_frame <= actual_start_frame or len(video) == 0:
@@ -237,9 +238,6 @@ if __name__ == "__main__":
         print("Model state reset for this segment.")
         
         window_frames = []
-        if last_frame_from_previous_batch is not None:
-            window_frames.append(last_frame_from_previous_batch)
-            print(f"Added last frame from previous batch for overlap (frame {start_frame})")
         
         is_first_step = True
         
@@ -278,64 +276,49 @@ if __name__ == "__main__":
             )[None]
             print("Saving video with predicted tracks...")
             vis = Visualizer(save_dir=save_dir, pad_value=120, linewidth=3)
-            output_filename = f"{seq_name}_{start_frame}_{end_frame}"
+            output_filename = f"{seq_name}_{start_frame}_{end_frame - 2}"
             vis.visualize(
                 video_tensor, pred_tracks, pred_visibility, query_frame=args.grid_query_frame, filename=output_filename
             )
-            # Check for red circle detection in the saved video and truncate if necessary
-            cap = cv2.VideoCapture(os.path.join(save_dir, output_filename + ".mp4"))
-            actual_end_frame = end_frame
+            # Post-process the saved video in-place without re-visualizing:
+            output_path = os.path.join(save_dir, output_filename + ".mp4")
+            cap = cv2.VideoCapture(output_path)
+            out_fps = cap.get(cv2.CAP_PROP_FPS)
+            if out_fps is None or out_fps <= 0:
+                out_fps = fps
+            frames = []
             i = 0
+            removed_original_due_to_no_red = False
             while True:
-                ret, cv_frame = cap.read()
+                ret, frame = cap.read()
                 if not ret:
                     break
-                red_circle = detect_red_circle(cv_frame)
+                if i < FROZEN_FRAMES:
+                    i += 1
+                    continue
+                red_circle = detect_red_circle(frame)
                 if red_circle is None:
-                    print(f"Red circle not detected in frame {actual_start_frame + i}. Truncating video backward.")
-                    
-                    # i is the index in window_frames where red circle was not detected
-                    frames_to_keep = i
-                    if frames_to_keep > 0:
-                        # CoTracker uses model.step * 2 frames for processing, so we need to account for frozen frames
-                        # The actual processed frames are the last model.step * 2 frames from window_frames
-                        frozen_frames = model.step * 2
-                        processed_frames = frozen_frames - len(window_frames)
-                        actual_processed_frames = i - processed_frames - 1
-                        
-                        actual_end_frame = actual_start_frame + actual_processed_frames
-                        truncated_window_frames = window_frames[:actual_processed_frames]
-                        
-                        print(f"Truncated window_frames: kept {len(truncated_window_frames)} frames (frames {actual_processed_frames} to {frames_to_keep-1}) out of {frames_to_keep} total frames")
-                        print(f"Accounted for frozen frames: {frozen_frames} frames used by CoTracker")
-                        
-                        truncated_video_tensor = torch.tensor(np.stack(truncated_window_frames), device=DEFAULT_DEVICE).permute(
-                            0, 3, 1, 2
-                        )[None]
-                        new_output_filename = f"{seq_name}_{start_frame}_{actual_end_frame}"
-                        vis.visualize(
-                            truncated_video_tensor, pred_tracks, pred_visibility, query_frame=args.grid_query_frame, filename=new_output_filename
-                        )
-                        print(f"Truncated video saved to {os.path.join(save_dir, new_output_filename)}")
-                        
-                        os.remove(os.path.join(save_dir, output_filename + ".mp4"))
-                        print(f"Removed original file: {output_filename}")
+                    print(f"No red circle detected at frame {i}, removing video {output_filename}.mp4")
+                    os.remove(output_path)
+                    end_frame = start_frame + i - FROZEN_FRAMES + 1
+                    output_filename = f"{seq_name}_{start_frame}_{end_frame - 2}"
+                    output_path = os.path.join(save_dir, output_filename + ".mp4")
                     break
+                frames.append(frame)
                 i += 1
             cap.release()
-            
-            if len(window_frames) > 0:
-                last_frame_from_previous_batch = window_frames[-1]
-            
-            # Set start_frame to the last frame index for overlapping in next batch
-            start_frame = actual_end_frame - 1
+            if len(frames) > 0:
+                height, width = frames[0].shape[:2]
+                fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                writer = cv2.VideoWriter(output_path, fourcc, out_fps, (width, height))
+                for f in frames:
+                    writer.write(f)
+                writer.release()
+                print(f"Saved video {output_filename}.mp4")
+            # Always progress to the next segment with 1-frame overlap
+            start_frame = max(min(end_frame - 2, num_frames), actual_start_frame + 1)
         else:
-            print("No tracks were predicted for this segment, skipping visualization.")
-            if len(window_frames) > 0:
-                last_frame_from_previous_batch = window_frames[-1]
-            
-            # Set start_frame to the last frame index for overlapping in next batch  
-            start_frame = end_frame - 1
-        print(f"Processed frames from {start_frame} to {end_frame}")
-
+            # If no tracks, still advance to avoid infinite loop at the end
+            start_frame = max(min(end_frame, num_frames), actual_start_frame + 1)
+        print(f"Processed frames from {actual_start_frame}")
     print(f"Processed all frames from 0 to {num_frames}")

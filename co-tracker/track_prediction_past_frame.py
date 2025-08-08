@@ -17,6 +17,44 @@ from typing import List, Dict, Any, Tuple, Optional
 from track_red import detect_red_circle, calculate_head_movement, remap_position_from_movement
 
 
+def compute_content_roi(frame: np.ndarray, white_threshold: int = 240) -> Optional[Tuple[int, int, int, int]]:
+    """
+    Detects the bounding box of the actual video content, excluding solid white
+    letterbox borders. Returns (x, y, w, h) of the content region, or None if
+    a reliable ROI cannot be determined.
+
+    The heuristic treats pixels with grayscale >= white_threshold as white and
+    computes the bounding rectangle around non-white pixels.
+    """
+    if frame is None or frame.size == 0:
+        return None
+
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    # Non-white mask
+    non_white_mask = (gray < white_threshold).astype(np.uint8) * 255
+
+    # If almost everything is white, bail out
+    non_white_ratio = float(np.count_nonzero(non_white_mask)) / non_white_mask.size
+    if non_white_ratio < 0.01:
+        return None
+
+    # Find the bounding box of non-white pixels
+    contours, _ = cv2.findContours(non_white_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return None
+
+    # Use the largest contour area as the content region
+    largest = max(contours, key=cv2.contourArea)
+    x, y, w, h = cv2.boundingRect(largest)
+
+    # Sanity check: avoid tiny or degenerate boxes
+    H, W = gray.shape[:2]
+    if w < W * 0.2 or h < H * 0.2:
+        return None
+
+    return int(x), int(y), int(w), int(h)
+
+
 def parse_video_filename(filename: str, mode: str = "advanced") -> Optional[Dict[str, Any]]:
     """
     Parses a video filename to extract metadata based on the specified mode.
@@ -80,7 +118,12 @@ def analyze_video_clip(
     output_video_path: Optional[Path] = None, 
     fps_override: Optional[float] = None, 
     show_video: bool = False,
-    video_fov_degrees: float = 104.0
+    video_fov_degrees: float = 104.0,
+    skip_frozen: bool = True,
+    frozen_strategy: str = "circle",  # "circle" or "diff"
+    frozen_warmup_frames: int = 15,
+    position_epsilon_px: float = 0.5,
+    diff_mean_threshold: float = 1.0,
 ) -> Tuple[List[Dict[str, Any]], List[float]]:
     """
     Processes a single video clip, aware of overlapping frames between clips.
@@ -114,6 +157,13 @@ def analyze_video_clip(
     prev_red_pos = None
     frame_idx_in_video = 0
     output_frame_count = 0
+    content_roi: Optional[Tuple[int, int, int, int]] = None  # (x, y, w, h) of content without white borders
+    # State for frozen-frame skipping
+    skipping_frozen = skip_frozen
+    static_reference_pos = None  # in cropped coords
+    prev_gray_for_diff = None
+    static_counter = 0
+    skipped_leading_frames = 0
 
     while True:
         ret, frame = cap.read()
@@ -125,31 +175,95 @@ def analyze_video_clip(
             frame_idx_in_video += 1
             continue
 
+        # Establish content ROI at the first processed frame
+        if content_roi is None:
+            content_roi = compute_content_roi(frame)
+
+        # Select the frame region used for all computations (exclude white borders if detected)
+        if content_roi is not None:
+            roi_x, roi_y, roi_w, roi_h = content_roi
+            proc_frame = frame[roi_y:roi_y + roi_h, roi_x:roi_x + roi_w]
+        else:
+            roi_x = roi_y = 0
+            roi_w, roi_h = frame.shape[1], frame.shape[0]
+            proc_frame = frame
+
         if not is_first_clip_in_group and frame_idx_in_video == start_processing_frame:
-            red_circle = detect_red_circle(frame)
+            red_circle = detect_red_circle(proc_frame)
             if red_circle:
-                prev_red_pos = (float(red_circle[0]), float(red_circle[1]))
+                prev_red_pos = (float(red_circle[0]), float(red_circle[1]))  # coords in cropped space
             frame_idx_in_video += 1
             continue
 
         vis_frame = frame.copy()
-        red_circle = detect_red_circle(frame)
+        red_circle = detect_red_circle(proc_frame)
         
-        curr_red_pos = (float(red_circle[0]), float(red_circle[1])) if red_circle else None
+        # Positions for computation are in cropped space; for reporting keep full-frame coords
+        curr_red_pos_cropped = (float(red_circle[0]), float(red_circle[1])) if red_circle else None
+        curr_red_pos = (curr_red_pos_cropped[0] + roi_x, curr_red_pos_cropped[1] + roi_y) if red_circle else None
         curr_radius = int(red_circle[2]) if red_circle else None
+
+        # Skip initial frozen frames
+        processed_idx = (frame_idx_in_video - start_processing_frame)
+        if skipping_frozen and processed_idx < frozen_warmup_frames:
+            if frozen_strategy == "circle":
+                if curr_red_pos_cropped is not None:
+                    if static_reference_pos is None:
+                        static_reference_pos = curr_red_pos_cropped
+                        static_counter = 1
+                    else:
+                        dx = curr_red_pos_cropped[0] - static_reference_pos[0]
+                        dy = curr_red_pos_cropped[1] - static_reference_pos[1]
+                        if (dx * dx + dy * dy) ** 0.5 <= position_epsilon_px:
+                            static_counter += 1
+                        else:
+                            skipping_frozen = False
+                            prev_red_pos = curr_red_pos_cropped
+                else:
+                    # If undetected, stop skipping to avoid dropping valid frames
+                    skipping_frozen = False
+            else:  # diff strategy
+                gray = cv2.cvtColor(proc_frame, cv2.COLOR_BGR2GRAY)
+                if prev_gray_for_diff is None:
+                    prev_gray_for_diff = gray
+                    static_counter = 1
+                else:
+                    mean_abs = float(np.mean(cv2.absdiff(prev_gray_for_diff, gray)))
+                    if mean_abs <= diff_mean_threshold:
+                        static_counter += 1
+                    else:
+                        skipping_frozen = False
+                        prev_red_pos = curr_red_pos_cropped if curr_red_pos_cropped is not None else prev_red_pos
+                    prev_gray_for_diff = gray
+
+            if skipping_frozen:
+                skipped_leading_frames += 1
+                frame_idx_in_video += 1
+                continue
         
         head_movement, recalculated_pos, prediction_error = None, None, None
 
-        if prev_red_pos and curr_red_pos:
-            head_movement = calculate_head_movement(prev_red_pos, curr_red_pos, width, height, video_fov_degrees=video_fov_degrees)
+        if prev_red_pos and curr_red_pos_cropped:
+            head_movement = calculate_head_movement(
+                prev_red_pos,
+                curr_red_pos_cropped,
+                roi_w,
+                roi_h,
+                video_fov_degrees=video_fov_degrees,
+            )
             if head_movement and frame_data:
                 frame_data[-1]['next_movement'] = head_movement
 
             if head_movement and 'horizontal' in head_movement and 'radians' in head_movement['horizontal'] and not np.isnan(head_movement['horizontal']['radians']):
-                recalculated_pos = remap_position_from_movement(prev_red_pos, head_movement, width, height)
+                recalculated_pos_cropped = remap_position_from_movement(prev_red_pos, head_movement, roi_w, roi_h)
+                recalculated_pos = (
+                    recalculated_pos_cropped[0] + roi_x,
+                    recalculated_pos_cropped[1] + roi_y,
+                ) if recalculated_pos_cropped else None
                 if recalculated_pos:
-                    error_x = recalculated_pos[0] - curr_red_pos[0]
-                    error_y = recalculated_pos[1] - curr_red_pos[1]
+                    # Compute error in the cropped coordinate space for numerical stability
+                    error_x = (recalculated_pos[0] - roi_x) - curr_red_pos_cropped[0]
+                    error_y = (recalculated_pos[1] - roi_y) - curr_red_pos_cropped[1]
                     prediction_error = {
                         "error_x": float(error_x), "error_y": float(error_y),
                         "distance": float(np.sqrt(error_x**2 + error_y**2))
@@ -157,11 +271,24 @@ def analyze_video_clip(
                     prediction_errors.append(prediction_error["distance"])
 
         # Add frame info to output (we already skipped to start_processing_frame)
+        processed_frame_index = output_frame_count  # starts at 0 for first emitted frame
+        source_frame_index = global_frame_offset + (frame_idx_in_video - start_processing_frame)
         frame_info = {
-            "frame_index": global_frame_offset + (frame_idx_in_video - start_processing_frame),
-            "timestamp": (global_frame_offset + (frame_idx_in_video - start_processing_frame)) / fps,
+            "frame_index": processed_frame_index,
+            "timestamp": processed_frame_index / fps,
+            "source_frame_index": source_frame_index,
+            "source_timestamp": source_frame_index / fps,
+            "global_frame_index": source_frame_index,
+            "global_timestamp": source_frame_index / fps,
             "social_category": social_category,
-            "red_circle": {"detected": curr_red_pos is not None, "position": curr_red_pos, "radius": curr_radius},
+            "roi": {"x": roi_x, "y": roi_y, "w": roi_w, "h": roi_h},
+            "frame_size_full": {"width": width, "height": height},
+            "red_circle": {
+                "detected": curr_red_pos is not None,
+                "position_full": curr_red_pos,
+                "position_content": curr_red_pos_cropped if red_circle else None,
+                "radius": curr_radius
+            },
             "head_movement": head_movement,
             "next_movement": None,
             "prediction": {"recalculated_position": recalculated_pos, "error": prediction_error}
@@ -178,8 +305,8 @@ def analyze_video_clip(
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
         
-        if curr_red_pos:
-            prev_red_pos = curr_red_pos
+        if curr_red_pos_cropped:
+            prev_red_pos = curr_red_pos_cropped
         frame_idx_in_video += 1
         
     cap.release()
