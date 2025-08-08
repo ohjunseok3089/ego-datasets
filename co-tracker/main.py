@@ -279,68 +279,55 @@ if __name__ == "__main__":
             vis.visualize(
                 video_tensor, pred_tracks, pred_visibility, query_frame=args.grid_query_frame, filename=output_filename
             )
-            # Post-process the saved video in-place without re-visualizing:
-            output_path = os.path.join(save_dir, output_filename + ".mp4")
-            cap = cv2.VideoCapture(output_path)
-            
+            # Check for red circle detection in the saved video and truncate if necessary
+            cap = cv2.VideoCapture(os.path.join(save_dir, output_filename + ".mp4"))
             actual_end_frame = end_frame
-            kept_frames = []
             i = 0
-            out_fps = cap.get(cv2.CAP_PROP_FPS)
-            if out_fps is None or out_fps <= 0:
-                out_fps = fps
-            prev_kept_frame = None
+            frame_interval = int(fps * FRAMES_INTERVAL) + (1 if start_frame > 0 else 0)
+            frozen_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT) - frame_interval
+            print(f"Frozen frames: {frozen_frames}")
             while True:
                 ret, cv_frame = cap.read()
+                if i < frozen_frames: 
+                    i += 1
+                    continue
                 if not ret:
-                    break       
+                    break
                 red_circle = detect_red_circle(cv_frame)
                 if red_circle is None:
-                    print(f"Red circle not detected in frame {actual_start_frame + i}. Trimming remaining frames from this point.")
+                    print(f"Red circle not detected in frame {start_frame + i}. Truncating video backward.")
+                    actual_end_frame = start_frame + i - frozen_frames
+                    
+                    frames_to_keep = actual_end_frame - start_frame
+                    if frames_to_keep > 0:
+                        truncated_window_frames = window_frames[:frames_to_keep]
+                        print(f"Truncated window_frames to {frames_to_keep} frames (up to frame {actual_end_frame})")
+                        
+                        truncated_video_tensor = torch.tensor(np.stack(truncated_window_frames), device=DEFAULT_DEVICE).permute(
+                            0, 3, 1, 2
+                        )[None]
+                        new_output_filename = f"{seq_name}_{start_frame}_{actual_end_frame}.mp4"
+                        vis.visualize(
+                            truncated_video_tensor, pred_tracks, pred_visibility, query_frame=args.grid_query_frame, filename=new_output_filename
+                        )
+                        print(f"Truncated video saved to {os.path.join(save_dir, new_output_filename)}")
+                        
+                        os.remove(os.path.join(save_dir, output_filename + ".mp4"))
+                        print(f"Removed original file: {output_filename}")
                     break
-                # De-duplicate consecutive identical frames
-                if prev_kept_frame is not None:
-                    try:
-                        if np.array_equal(cv_frame, prev_kept_frame):
-                            i += 1
-                            continue
-                    except Exception:
-                        pass
-                kept_frames.append(cv_frame)
-                prev_kept_frame = cv_frame
                 i += 1
             cap.release()
-
-            if len(kept_frames) > 0:
-                height, width = kept_frames[0].shape[:2]
-                new_actual_end_frame = actual_start_frame + len(kept_frames)
-                new_output_filename = f"{seq_name}_{actual_start_frame}_{new_actual_end_frame}"
-                new_output_path = os.path.join(save_dir, new_output_filename + ".mp4")
-                fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-                writer = cv2.VideoWriter(new_output_path, fourcc, out_fps, (width, height))
-                for f in kept_frames:
-                    writer.write(f)
-                writer.release()
-                if new_output_filename != output_filename:
-                    os.remove(output_path)
-                    print(f"Removed original {output_filename}.mp4")
-                print(f"Trimmed video saved to {new_output_path}; removed original {output_filename}.mp4")
-                actual_end_frame = new_actual_end_frame
-            else:
-                print("No frames kept after trimming; keeping original output.")
             
-            start_frame = actual_end_frame - 1
+            if len(window_frames) > 0:
+                last_frame_from_previous_batch = window_frames[-1]
+            
+            start_frame = actual_end_frame
         else:
             print("No tracks were predicted for this segment, skipping visualization.")
-            # Ensure forward progress to avoid infinite loops at the end
+            if len(window_frames) > 0:
+                last_frame_from_previous_batch = window_frames[-1]
+            
             start_frame = end_frame
-        try:
-            _logged_end = actual_end_frame
-        except NameError:
-            _logged_end = end_frame
-        print(f"Processed frames from {actual_start_frame} to {_logged_end}")
-        # If no progress is made, break to avoid infinite loop
-        if start_frame <= actual_start_frame:
-            break
+        print(f"Processed frames from {start_frame} to {end_frame}")
 
     print(f"Processed all frames from 0 to {num_frames}")
