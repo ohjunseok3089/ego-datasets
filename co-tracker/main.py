@@ -288,6 +288,7 @@ if __name__ == "__main__":
                 out_fps = fps
             frames = []
             i = 0
+            removed_original_due_to_no_red = False
             while True:
                 ret, frame = cap.read()
                 if not ret:
@@ -298,10 +299,9 @@ if __name__ == "__main__":
                 red_circle = detect_red_circle(frame)
                 if red_circle is None:
                     print(f"No red circle detected at frame {i}, removing video {output_filename}.mp4")
-                    os.remove(output_path)
-                    end_frame = start_frame + i - FROZEN_FRAMES - 2
-                    output_filename = f"{seq_name}_{start_frame}_{end_frame}"
-                    output_path = os.path.join(save_dir, output_filename + ".mp4")
+                    if os.path.exists(output_path):
+                        os.remove(output_path)
+                    removed_original_due_to_no_red = True
                     break
                 frames.append(frame)
                 i += 1
@@ -313,9 +313,7 @@ if __name__ == "__main__":
                 for f in frames:
                     writer.write(f)
                 writer.release()
-              
-            start_frame = end_frame - 2
+            # Always progress to the next segment with 1-frame overlap
+            start_frame = max(min(end_frame - 1, num_frames), actual_start_frame + 1)
         print(f"Processed frames from {actual_start_frame}")
-        if start_frame <= actual_start_frame:
-            break
     print(f"Processed all frames from 0 to {num_frames}")
