@@ -276,7 +276,7 @@ if __name__ == "__main__":
             )[None]
             print("Saving video with predicted tracks...")
             vis = Visualizer(save_dir=save_dir, pad_value=120, linewidth=3)
-            output_filename = f"{seq_name}_{start_frame}_{end_frame - 1}"
+            output_filename = f"{seq_name}_{start_frame}_{end_frame - 2}"
             vis.visualize(
                 video_tensor, pred_tracks, pred_visibility, query_frame=args.grid_query_frame, filename=output_filename
             )
@@ -298,7 +298,7 @@ if __name__ == "__main__":
                 red_circle = detect_red_circle(frame)
                 if red_circle is None:
                     os.remove(output_path)
-                    end_frame = start_frame + i - FROZEN_FRAMES - 1
+                    end_frame = start_frame + i - FROZEN_FRAMES - 2
                     output_filename = f"{seq_name}_{start_frame}_{end_frame}"
                     output_path = os.path.join(save_dir, output_filename + ".mp4")
                     break
@@ -309,63 +309,12 @@ if __name__ == "__main__":
                 height, width = frames[0].shape[:2]
                 fourcc = cv2.VideoWriter_fourcc(*"mp4v")
                 writer = cv2.VideoWriter(output_path, fourcc, out_fps, (width, height))
-                for f in frames:
-                    writer.write(f)
+                for i in range(len(frames) - 1):
+                    writer.write(frames[i])
                 writer.release()
-                
-        #     actual_end_frame = end_frame
-        #     kept_frames = []
-        #     i = 0
-        #     out_fps = cap.get(cv2.CAP_PROP_FPS)
-        #     if out_fps is None or out_fps <= 0:
-        #         out_fps = fps
-        #     saved_len = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        #     while True:
-        #         ret, cv_frame = cap.read()
-        #         if not ret:
-        #             break
-        #         if i < keep_start_index:
-        #             i += 1
-        #             continue
-        #         red_circle = detect_red_circle(cv_frame)
-        #         if red_circle is None:
-        #             print(f"Red circle not detected in frame {actual_start_frame + i}. Trimming remaining frames from this point.")
-        #             break
-        #         kept_frames.append(cv_frame)
-        #         i += 1
-        #     cap.release()
-
-        #     if len(kept_frames) > 0:
-        #         height, width = kept_frames[0].shape[:2]
-        #         new_start_frame = end_frame - interval_frames
-        #         new_actual_end_frame = new_start_frame + len(kept_frames)
-        #         new_output_filename = f"{seq_name}_{new_start_frame}_{new_actual_end_frame}"
-        #         new_output_path = os.path.join(save_dir, new_output_filename + ".mp4")
-        #         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        #         writer = cv2.VideoWriter(new_output_path, fourcc, out_fps, (width, height))
-        #         for f in kept_frames:
-        #             writer.write(f)
-        #         writer.release()
-        #         if new_output_filename != output_filename:
-        #             os.remove(output_path)
-        #             print(f"Removed original {output_filename}.mp4")
-        #         print(f"Trimmed video saved to {new_output_path}; removed original {output_filename}.mp4")
-        #         actual_end_frame = new_actual_end_frame
-        #     else:
-        #         print("No frames kept after trimming; keeping original output.")
-            
+              
             start_frame = end_frame - 2
-        # else:
-        #     print("No tracks were predicted for this segment, skipping visualization.")
-        #     # Ensure forward progress to avoid infinite loops at the end
-        #     start_frame = end_frame
-        # try:
-        #     _logged_end = actual_end_frame
-        # except NameError:
-        #     _logged_end = end_frame
         print(f"Processed frames from {actual_start_frame}")
-        # # If no progress is made, break to avoid infinite loop
         if start_frame <= actual_start_frame:
             break
-
     print(f"Processed all frames from 0 to {num_frames}")
