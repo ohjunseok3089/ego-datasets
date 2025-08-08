@@ -288,7 +288,7 @@ if __name__ == "__main__":
             out_fps = cap.get(cv2.CAP_PROP_FPS)
             if out_fps is None or out_fps <= 0:
                 out_fps = fps
-            interval_frames = int(fps * FRAMES_INTERVAL) + (1 if start_frame > 0 else 0)
+            interval_frames = int(fps * FRAMES_INTERVAL)
             saved_len = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             keep_start_index = max(0, saved_len - interval_frames)
             while True:
@@ -321,9 +321,7 @@ if __name__ == "__main__":
                 print(f"Trimmed video saved to {new_output_path}; removed original {output_filename}.mp4")
                 actual_end_frame = new_actual_end_frame
             else:
-                print("No frames kept after trimming; removing original output.")
-                if os.path.exists(output_path):
-                    os.remove(output_path)
+                print("No frames kept after trimming; keeping original output.")
             
             start_frame = actual_end_frame - 1
         else:
@@ -333,6 +331,6 @@ if __name__ == "__main__":
             _logged_end = actual_end_frame
         except NameError:
             _logged_end = end_frame
-        print(f"Processed frames from {start_frame} to {_logged_end}")
+        print(f"Processed frames from {actual_start_frame} to {_logged_end}")
 
     print(f"Processed all frames from 0 to {num_frames}")
