@@ -214,7 +214,7 @@ if __name__ == "__main__":
     while start_frame < num_frames:
         # Overlap handled by advancing start_frame to previous end - 1; no manual carryover frame
         actual_start_frame = start_frame
-        print(f"Processing frames from {actual_start_frame} to {min(actual_start_frame + FRAMES_INTERVAL, num_frames)}")
+        print(f"Processing frames from {actual_start_frame} to {min(actual_start_frame + FRAMES_INTERVAL - 1, num_frames)}")
         video, end_frame = extract_frames(full_vid, FRAMES_INTERVAL, actual_start_frame, num_frames)
         
         # Skip if no frames to process
@@ -314,7 +314,11 @@ if __name__ == "__main__":
                 for f in frames:
                     writer.write(f)
                 writer.release()
+                print(f"Saved video {output_filename}.mp4")
             # Always progress to the next segment with 1-frame overlap
             start_frame = max(min(end_frame - 2, num_frames), actual_start_frame + 1)
+        else:
+            # If no tracks, still advance to avoid infinite loop at the end
+            start_frame = max(min(end_frame, num_frames), actual_start_frame + 1)
         print(f"Processed frames from {actual_start_frame}")
     print(f"Processed all frames from 0 to {num_frames}")
