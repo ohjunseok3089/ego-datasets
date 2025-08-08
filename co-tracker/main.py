@@ -282,47 +282,43 @@ if __name__ == "__main__":
             vis.visualize(
                 video_tensor, pred_tracks, pred_visibility, query_frame=args.grid_query_frame, filename=output_filename
             )
-            # Check for red circle detection in the saved video and truncate if necessary
+
+            # New logic: drop leading frames without a red circle (frozen/blank overlay)
             cap = cv2.VideoCapture(os.path.join(save_dir, output_filename + ".mp4"))
-            actual_end_frame = end_frame
-            i = 0
+            detected_flags = []
             while True:
                 ret, cv_frame = cap.read()
                 if not ret:
                     break
-                red_circle = detect_red_circle(cv_frame)
-                if red_circle is None:
-                    print(f"Red circle not detected in frame {actual_start_frame + i}. Truncating video backward.")
-                    
-                    # i is the index in window_frames where red circle was not detected
-                    frames_to_keep = i
-                    if frames_to_keep > 0:
-                        # CoTracker uses model.step * 2 frames for processing, so we need to account for frozen frames
-                        # The actual processed frames are the last model.step * 2 frames from window_frames
-                        frozen_frames = model.step * 2
-                        processed_frames = frozen_frames - len(window_frames)
-                        actual_processed_frames = i - processed_frames - 1
-                        
-                        actual_end_frame = actual_start_frame + actual_processed_frames
-                        truncated_window_frames = window_frames[:actual_processed_frames]
-                        
-                        print(f"Truncated window_frames: kept {len(truncated_window_frames)} frames (frames {actual_processed_frames} to {frames_to_keep-1}) out of {frames_to_keep} total frames")
-                        print(f"Accounted for frozen frames: {frozen_frames} frames used by CoTracker")
-                        
-                        truncated_video_tensor = torch.tensor(np.stack(truncated_window_frames), device=DEFAULT_DEVICE).permute(
-                            0, 3, 1, 2
-                        )[None]
-                        new_output_filename = f"{seq_name}_{start_frame}_{actual_end_frame}"
-                        vis.visualize(
-                            truncated_video_tensor, pred_tracks, pred_visibility, query_frame=args.grid_query_frame, filename=new_output_filename
-                        )
-                        print(f"Truncated video saved to {os.path.join(save_dir, new_output_filename)}")
-                        
-                        os.remove(os.path.join(save_dir, output_filename + ".mp4"))
-                        print(f"Removed original file: {output_filename}")
-                    break
-                i += 1
+                detected_flags.append(detect_red_circle(cv_frame) is not None)
             cap.release()
+
+            first_valid_idx = None
+            for idx, flag in enumerate(detected_flags):
+                if flag:
+                    first_valid_idx = idx
+                    break
+
+            actual_end_frame = end_frame
+            if first_valid_idx is None:
+                print("No red circle detected in this segment. Skipping save for this window.")
+                os.remove(os.path.join(save_dir, output_filename + ".mp4"))
+                # keep overlap progression using original end_frame
+            elif first_valid_idx > 0:
+                print(f"Dropping {first_valid_idx} leading frames without red circle.")
+                truncated_window_frames = window_frames[first_valid_idx:]
+                actual_end_frame = actual_start_frame + len(truncated_window_frames)
+
+                truncated_video_tensor = torch.tensor(np.stack(truncated_window_frames), device=DEFAULT_DEVICE).permute(
+                    0, 3, 1, 2
+                )[None]
+                new_output_filename = f"{seq_name}_{actual_start_frame + first_valid_idx}_{actual_end_frame}"
+                vis.visualize(
+                    truncated_video_tensor, pred_tracks, pred_visibility, query_frame=args.grid_query_frame, filename=new_output_filename
+                )
+                print(f"Truncated video saved to {os.path.join(save_dir, new_output_filename)}")
+                os.remove(os.path.join(save_dir, output_filename + ".mp4"))
+                print(f"Removed original file: {output_filename}")
             
             if len(window_frames) > 0:
                 last_frame_from_previous_batch = window_frames[-1]
