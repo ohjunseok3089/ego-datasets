@@ -282,55 +282,58 @@ if __name__ == "__main__":
             vis.visualize(
                 video_tensor, pred_tracks, pred_visibility, query_frame=args.grid_query_frame, filename=output_filename
             )
-
-            # New logic: drop leading frames without a red circle (frozen/blank overlay)
-            cap = cv2.VideoCapture(os.path.join(save_dir, output_filename + ".mp4"))
-            detected_flags = []
+            # Post-process the saved video in-place without re-visualizing:
+            output_path = os.path.join(save_dir, output_filename + ".mp4")
+            cap = cv2.VideoCapture(output_path)
+            actual_end_frame = end_frame
+            kept_frames = []
+            i = 0
+            out_fps = cap.get(cv2.CAP_PROP_FPS)
+            if out_fps is None or out_fps <= 0:
+                out_fps = fps
+            initial_trim_frames = int(out_fps * FRAMES_INTERVAL) + (1 if last_frame_from_previous_batch is not None else 0)
             while True:
                 ret, cv_frame = cap.read()
                 if not ret:
                     break
-                detected_flags.append(detect_red_circle(cv_frame) is not None)
+                if i < initial_trim_frames:
+                    i += 1
+                    continue
+                red_circle = detect_red_circle(cv_frame)
+                if red_circle is None:
+                    print(f"Red circle not detected in frame {actual_start_frame + i}. Trimming remaining frames from this point.")
+                    break
+                kept_frames.append(cv_frame)
+                i += 1
             cap.release()
 
-            first_valid_idx = None
-            for idx, flag in enumerate(detected_flags):
-                if flag:
-                    first_valid_idx = idx
-                    break
-
-            actual_end_frame = end_frame
-            if first_valid_idx is None:
-                print("No red circle detected in this segment. Skipping save for this window.")
-                os.remove(os.path.join(save_dir, output_filename + ".mp4"))
-                # keep overlap progression using original end_frame
-            elif first_valid_idx > 0:
-                print(f"Dropping {first_valid_idx} leading frames without red circle.")
-                truncated_window_frames = window_frames[first_valid_idx:]
-                actual_end_frame = actual_start_frame + len(truncated_window_frames)
-
-                truncated_video_tensor = torch.tensor(np.stack(truncated_window_frames), device=DEFAULT_DEVICE).permute(
-                    0, 3, 1, 2
-                )[None]
-                new_output_filename = f"{seq_name}_{actual_start_frame + first_valid_idx}_{actual_end_frame}"
-                vis.visualize(
-                    truncated_video_tensor, pred_tracks, pred_visibility, query_frame=args.grid_query_frame, filename=new_output_filename
-                )
-                print(f"Truncated video saved to {os.path.join(save_dir, new_output_filename)}")
-                os.remove(os.path.join(save_dir, output_filename + ".mp4"))
-                print(f"Removed original file: {output_filename}")
+            if len(kept_frames) > 0:
+                height, width = kept_frames[0].shape[:2]
+                new_actual_end_frame = actual_start_frame + len(kept_frames)
+                new_output_filename = f"{seq_name}_{start_frame}_{new_actual_end_frame}"
+                new_output_path = os.path.join(save_dir, new_output_filename + ".mp4")
+                fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+                writer = cv2.VideoWriter(new_output_path, fourcc, out_fps, (width, height))
+                for f in kept_frames:
+                    writer.write(f)
+                writer.release()
+                os.remove(output_path)
+                print(f"Trimmed video saved to {new_output_path}; removed original {output_filename}.mp4")
+                actual_end_frame = new_actual_end_frame
+            else:
+                print("No frames kept after trimming; removing original output.")
+                if os.path.exists(output_path):
+                    os.remove(output_path)
             
             if len(window_frames) > 0:
                 last_frame_from_previous_batch = window_frames[-1]
             
-            # Set start_frame to the last frame index for overlapping in next batch
             start_frame = actual_end_frame - 1
         else:
             print("No tracks were predicted for this segment, skipping visualization.")
             if len(window_frames) > 0:
                 last_frame_from_previous_batch = window_frames[-1]
             
-            # Set start_frame to the last frame index for overlapping in next batch  
             start_frame = end_frame - 1
         print(f"Processed frames from {start_frame} to {end_frame}")
 
