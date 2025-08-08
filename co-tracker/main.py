@@ -331,7 +331,7 @@ if __name__ == "__main__":
         #     _logged_end = actual_end_frame
         # except NameError:
         #     _logged_end = end_frame
-        # print(f"Processed frames from {actual_start_frame} to {_logged_end}")
+        print(f"Processed frames from {actual_start_frame}")
         # # If no progress is made, break to avoid infinite loop
         if start_frame <= actual_start_frame:
             break
