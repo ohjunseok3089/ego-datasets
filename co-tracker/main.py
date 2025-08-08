@@ -211,8 +211,8 @@ if __name__ == "__main__":
     last_frame_from_previous_batch = None
     
     while start_frame < num_frames:
-        # For overlapping: if we have a previous frame, start from next frame
-        actual_start_frame = start_frame + 1 if last_frame_from_previous_batch is not None else start_frame
+        # Overlap handled by advancing start_frame to previous end - 1; no manual carryover frame
+        actual_start_frame = start_frame
         print(f"Processing frames from {actual_start_frame} to {min(actual_start_frame + int(fps * FRAMES_INTERVAL), num_frames)}")
         video, end_frame = extract_frames(full_vid, FRAMES_INTERVAL, fps, actual_start_frame, num_frames)
         
@@ -237,9 +237,6 @@ if __name__ == "__main__":
         print("Model state reset for this segment.")
         
         window_frames = []
-        if last_frame_from_previous_batch is not None:
-            window_frames.append(last_frame_from_previous_batch)
-            print(f"Added last frame from previous batch for overlap (frame {start_frame})")
         
         is_first_step = True
         
@@ -291,7 +288,8 @@ if __name__ == "__main__":
             out_fps = cap.get(cv2.CAP_PROP_FPS)
             if out_fps is None or out_fps <= 0:
                 out_fps = fps
-            initial_trim_frames = int(out_fps * FRAMES_INTERVAL) + (1 if last_frame_from_previous_batch is not None else 0)
+            # Trim the initial frozen interval only
+            initial_trim_frames = int(out_fps * FRAMES_INTERVAL)
             while True:
                 ret, cv_frame = cap.read()
                 if not ret:
@@ -309,8 +307,9 @@ if __name__ == "__main__":
 
             if len(kept_frames) > 0:
                 height, width = kept_frames[0].shape[:2]
-                new_actual_end_frame = actual_start_frame + len(kept_frames)
-                new_output_filename = f"{seq_name}_{start_frame}_{new_actual_end_frame}"
+                new_start_frame = start_frame + initial_trim_frames
+                new_actual_end_frame = new_start_frame + len(kept_frames)
+                new_output_filename = f"{seq_name}_{new_start_frame}_{new_actual_end_frame}"
                 new_output_path = os.path.join(save_dir, new_output_filename + ".mp4")
                 fourcc = cv2.VideoWriter_fourcc(*"mp4v")
                 writer = cv2.VideoWriter(new_output_path, fourcc, out_fps, (width, height))
@@ -325,15 +324,9 @@ if __name__ == "__main__":
                 if os.path.exists(output_path):
                     os.remove(output_path)
             
-            if len(window_frames) > 0:
-                last_frame_from_previous_batch = window_frames[-1]
-            
             start_frame = actual_end_frame - 1
         else:
             print("No tracks were predicted for this segment, skipping visualization.")
-            if len(window_frames) > 0:
-                last_frame_from_previous_batch = window_frames[-1]
-            
             start_frame = end_frame - 1
         print(f"Processed frames from {start_frame} to {end_frame}")
 
