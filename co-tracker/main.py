@@ -282,35 +282,39 @@ if __name__ == "__main__":
             # Post-process the saved video in-place without re-visualizing:
             output_path = os.path.join(save_dir, output_filename + ".mp4")
             cap = cv2.VideoCapture(output_path)
+            
             actual_end_frame = end_frame
             kept_frames = []
             i = 0
             out_fps = cap.get(cv2.CAP_PROP_FPS)
             if out_fps is None or out_fps <= 0:
                 out_fps = fps
-            interval_frames = int(fps * FRAMES_INTERVAL) + (1 if start_frame > 0 else 0)
-            saved_len = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            keep_start_index = max(0, saved_len - interval_frames)
+            prev_kept_frame = None
             while True:
                 ret, cv_frame = cap.read()
                 if not ret:
-                    break
-                if i < keep_start_index:
-                    i += 1
-                    continue
+                    break       
                 red_circle = detect_red_circle(cv_frame)
                 if red_circle is None:
                     print(f"Red circle not detected in frame {actual_start_frame + i}. Trimming remaining frames from this point.")
                     break
+                # De-duplicate consecutive identical frames
+                if prev_kept_frame is not None:
+                    try:
+                        if np.array_equal(cv_frame, prev_kept_frame):
+                            i += 1
+                            continue
+                    except Exception:
+                        pass
                 kept_frames.append(cv_frame)
+                prev_kept_frame = cv_frame
                 i += 1
             cap.release()
 
             if len(kept_frames) > 0:
                 height, width = kept_frames[0].shape[:2]
-                new_start_frame = end_frame - interval_frames
-                new_actual_end_frame = new_start_frame + len(kept_frames)
-                new_output_filename = f"{seq_name}_{new_start_frame}_{new_actual_end_frame}"
+                new_actual_end_frame = actual_start_frame + len(kept_frames)
+                new_output_filename = f"{seq_name}_{actual_start_frame}_{new_actual_end_frame}"
                 new_output_path = os.path.join(save_dir, new_output_filename + ".mp4")
                 fourcc = cv2.VideoWriter_fourcc(*"mp4v")
                 writer = cv2.VideoWriter(new_output_path, fourcc, out_fps, (width, height))
