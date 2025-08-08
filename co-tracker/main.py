@@ -317,7 +317,9 @@ if __name__ == "__main__":
                 for f in kept_frames:
                     writer.write(f)
                 writer.release()
-                os.remove(output_path)
+                if new_output_filename != output_filename:
+                    os.remove(output_path)
+                    print(f"Removed original {output_filename}.mp4")
                 print(f"Trimmed video saved to {new_output_path}; removed original {output_filename}.mp4")
                 actual_end_frame = new_actual_end_frame
             else:
@@ -326,11 +328,15 @@ if __name__ == "__main__":
             start_frame = actual_end_frame - 1
         else:
             print("No tracks were predicted for this segment, skipping visualization.")
-            start_frame = end_frame - 1
+            # Ensure forward progress to avoid infinite loops at the end
+            start_frame = end_frame
         try:
             _logged_end = actual_end_frame
         except NameError:
             _logged_end = end_frame
         print(f"Processed frames from {actual_start_frame} to {_logged_end}")
+        # If no progress is made, break to avoid infinite loop
+        if start_frame <= actual_start_frame:
+            break
 
     print(f"Processed all frames from 0 to {num_frames}")
