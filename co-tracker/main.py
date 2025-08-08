@@ -288,7 +288,7 @@ if __name__ == "__main__":
             out_fps = cap.get(cv2.CAP_PROP_FPS)
             if out_fps is None or out_fps <= 0:
                 out_fps = fps
-            interval_frames = int(out_fps * FRAMES_INTERVAL) + (1 if start_frame > 0 else 0)
+            interval_frames = int(fps * FRAMES_INTERVAL) + (1 if start_frame > 0 else 0)
             saved_len = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             keep_start_index = max(0, saved_len - interval_frames)
             while True:
