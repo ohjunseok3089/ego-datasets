@@ -314,6 +314,6 @@ if __name__ == "__main__":
                     writer.write(f)
                 writer.release()
             # Always progress to the next segment with 1-frame overlap
-            start_frame = max(min(end_frame - 1, num_frames), actual_start_frame)
+            start_frame = max(min(end_frame - 2, num_frames), actual_start_frame + 1)
         print(f"Processed frames from {actual_start_frame}")
     print(f"Processed all frames from 0 to {num_frames}")
