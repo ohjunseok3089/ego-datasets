@@ -310,8 +310,8 @@ if __name__ == "__main__":
                 height, width = frames[0].shape[:2]
                 fourcc = cv2.VideoWriter_fourcc(*"mp4v")
                 writer = cv2.VideoWriter(output_path, fourcc, out_fps, (width, height))
-                for i in range(len(frames) - 1):
-                    writer.write(frames[i])
+                for f in frames:
+                    writer.write(f)
                 writer.release()
               
             start_frame = end_frame - 2
