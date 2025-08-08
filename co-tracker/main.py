@@ -300,8 +300,8 @@ if __name__ == "__main__":
                 if red_circle is None:
                     print(f"No red circle detected at frame {i}, removing video {output_filename}.mp4")
                     os.remove(output_path)
-                    end_frame = start_frame + i - FROZEN_FRAMES - 1
-                    output_filename = f"{seq_name}_{start_frame}_{end_frame}"
+                    end_frame = start_frame + i - FROZEN_FRAMES + 1
+                    output_filename = f"{seq_name}_{start_frame}_{end_frame - 1}"
                     output_path = os.path.join(save_dir, output_filename + ".mp4")
                     break
                 frames.append(frame)
