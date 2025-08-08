@@ -30,7 +30,7 @@ def extract_video_info(video_path):
         raise ValueError(f"Failed to load video: {video_path}")
 
 def extract_frames(video, frames_to_extract, start_frame, num_frames):
-    end_frame = start_frame + frames_to_extract
+    end_frame = start_frame + frames_to_extract + 1
     if end_frame > num_frames:
         end_frame = num_frames
     video = video[start_frame:end_frame]
@@ -214,8 +214,8 @@ if __name__ == "__main__":
     while start_frame < num_frames:
         # Overlap handled by advancing start_frame to previous end - 1; no manual carryover frame
         actual_start_frame = start_frame
-        print(f"Processing frames from {actual_start_frame} to {min(actual_start_frame + FRAMES_INTERVAL + 1, num_frames)}")
-        video, end_frame = extract_frames(full_vid, FRAMES_INTERVAL + 1, actual_start_frame, num_frames)
+        print(f"Processing frames from {actual_start_frame} to {min(actual_start_frame + FRAMES_INTERVAL, num_frames)}")
+        video, end_frame = extract_frames(full_vid, FRAMES_INTERVAL, actual_start_frame, num_frames)
         
         # Skip if no frames to process
         if end_frame <= actual_start_frame or len(video) == 0:
@@ -301,7 +301,7 @@ if __name__ == "__main__":
                     print(f"No red circle detected at frame {i}, removing video {output_filename}.mp4")
                     os.remove(output_path)
                     end_frame = start_frame + i - FROZEN_FRAMES + 1
-                    output_filename = f"{seq_name}_{start_frame}_{end_frame - 1}"
+                    output_filename = f"{seq_name}_{start_frame}_{end_frame - 2}"
                     output_path = os.path.join(save_dir, output_filename + ".mp4")
                     break
                 frames.append(frame)
