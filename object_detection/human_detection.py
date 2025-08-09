@@ -6,26 +6,37 @@ import argparse
 import os
 from collections import defaultdict
 
-def calculate_iou(box1, box2):
-    """Calculate Intersection over Union (IoU) between two bounding boxes"""
-    x1_1, y1_1, x2_1, y2_1 = box1
-    x1_2, y1_2, x2_2, y2_2 = box2
+# def calculate_iou(box1, box2):
+#     """Calculate Intersection over Union (IoU) between two bounding boxes"""
+#     x1_1, y1_1, x2_1, y2_1 = box1
+#     x1_2, y1_2, x2_2, y2_2 = box2
     
-    # Calculate intersection
-    x1_i = max(x1_1, x1_2)
-    y1_i = max(y1_1, y1_2)
-    x2_i = min(x2_1, x2_2)
-    y2_i = min(y2_1, y2_2)
+#     # Calculate intersection
+#     x1_i = max(x1_1, x1_2)
+#     y1_i = max(y1_1, y1_2)
+#     x2_i = min(x2_1, x2_2)
+#     y2_i = min(y2_1, y2_2)
     
-    if x2_i <= x1_i or y2_i <= y1_i:
+#     if x2_i <= x1_i or y2_i <= y1_i:
+#         return 0.0
+    
+#     intersection = (x2_i - x1_i) * (y2_i - y1_i)
+#     area1 = (x2_1 - x1_1) * (y2_1 - y1_1)
+#     area2 = (x2_2 - x1_2) * (y2_2 - y1_2)
+#     union = area1 + area2 - intersection
+    
+#     return intersection / union if union > 0 else 0.08
+
+def face_coverage_in_body(face, body):
+    fx1, fy1, fx2, fy2 = face
+    bx1, by1, bx2, by2 = body
+    ix1, iy1 = max(fx1, bx1), max(fy1, by1)
+    ix2, iy2 = min(fx2, bx2), min(fy2, by2)
+    if ix2 <= ix1 or iy2 <= iy1:
         return 0.0
-    
-    intersection = (x2_i - x1_i) * (y2_i - y1_i)
-    area1 = (x2_1 - x1_1) * (y2_1 - y1_1)
-    area2 = (x2_2 - x1_2) * (y2_2 - y1_2)
-    union = area1 + area2 - intersection
-    
-    return intersection / union if union > 0 else 0.0
+    inter = (ix2 - ix1) * (iy2 - iy1)
+    face_area = max(1, (fx2 - fx1) * (fy2 - fy1))
+    return inter / face_area
 
 def map_to_ground_truth(detection_results, face_recognition_csv_path):
     """Map human detection results to ground truth face recognition data"""
@@ -45,7 +56,7 @@ def map_to_ground_truth(detection_results, face_recognition_csv_path):
         if 'person_id_' not in body_row['class_name']:
             continue
             
-        body_frame = body_row['frame']
+        body_frame = body_row['frame_number']
         body_box = [body_row['x1'], body_row['y1'], body_row['x2'], body_row['y2']]
         body_track_id = body_row['class_name']
         
@@ -58,11 +69,12 @@ def map_to_ground_truth(detection_results, face_recognition_csv_path):
         
         for _, face_row in nearby_faces.iterrows():
             face_box = [face_row['x1'], face_row['y1'], face_row['x2'], face_row['y2']]
-            iou = calculate_iou(body_box, face_box)
+            # iou = calculate_iou(body_box, face_box)
+            face_coverage = face_coverage_in_body(face_box, body_box)
             
-            if iou > 0.1:  # Minimum overlap threshold
+            if face_coverage > 0.1:  # Minimum overlap threshold
                 face_person_id = face_row['person_id']
-                person_mapping[body_track_id].append((face_person_id, iou, 1))
+                person_mapping[body_track_id].append((face_person_id, face_coverage, 1))
     
     # Determine best mapping for each body track based on majority overlap
     final_mapping = {}
@@ -124,11 +136,6 @@ def is_face_inside_body(face_box, body_box):
     if not (body_y1 <= face_center_y <= upper_body_limit):
         return False
     
-    # Additional check: face should have reasonable overlap with body (more lenient)
-    iou = calculate_iou(face_box, body_box)
-    if iou < 0.005:  # More lenient overlap requirement
-        return False
-    
     return True
 
 def apply_global_mapping(detection_results, face_df):
@@ -144,11 +151,11 @@ def apply_global_mapping(detection_results, face_df):
         if 'person_id_' not in body_row['class_name']:
             continue
             
-        body_frame = body_row['frame']
+        body_frame = body_row['frame_number']
         body_box = [body_row['x1'], body_row['y1'], body_row['x2'], body_row['y2']]
         body_track_id = body_row['class_name']
         
-        # Look for face detections in nearby frames (±7 frames for better coverage)
+        # Look for face detections in nearby frames (7 frames for better coverage)
         frame_tolerance = 7
         nearby_faces = face_df[
             (face_df['frame_number'] >= body_frame - frame_tolerance) & 
@@ -161,8 +168,6 @@ def apply_global_mapping(detection_results, face_df):
             # Use strict positioning check instead of just IoU
             if is_face_inside_body(face_box, body_box):
                 face_person_id = face_row['person_id']
-                track_mapping[body_track_id][face_person_id]['matches'] += 1
-                track_mapping[body_track_id][face_person_id]['frames'].add(body_frame)
     
     # Determine final mapping with strict criteria
     final_mapping = {}
@@ -179,19 +184,16 @@ def apply_global_mapping(detection_results, face_df):
             match_count = data['matches']
             frame_count = len(data['frames'])
             
-            # More lenient requirements: at least 3 matches across at least 2 different frames
             if match_count >= 3 and frame_count >= 2:
                 if match_count > best_match_count:
                     best_person = person_id
                     best_match_count = match_count
                     best_frame_count = frame_count
         
-        # More lenient conflict resolution - allow multiple tracks per person
         if best_person:
             final_mapping[body_track_id] = best_person
             print(f"Global mapping: {body_track_id} -> person_{best_person} ({best_match_count} matches across {best_frame_count} frames)")
     
-    # Update ALL detection results with global mapping
     updated_results = []
     for result in detection_results:
         updated_result = result.copy()
@@ -222,7 +224,7 @@ def recreate_video_with_mapped_labels(input_video_path, output_video_path, detec
     # Create frame-indexed detection results
     frame_detections = defaultdict(list)
     for result in detection_results:
-        frame_detections[result['frame']].append(result)
+        frame_detections[result['frame_number']].append(result)
     
     frame_number = 0
     while cap.isOpened():
@@ -323,7 +325,7 @@ def process_video_with_yolo(video_path, output_video_path, output_csv_path, face
                         person_label = f"{class_name}_no_id"
                     
                     detection_results.append({
-                        'frame': frame_number,
+                        'frame_number': frame_number,
                         'class_name': person_label,
                         'confidence': f"{confidence:.2f}",
                         'x1': x1, 'y1': y1, 'x2': x2, 'y2': y2
