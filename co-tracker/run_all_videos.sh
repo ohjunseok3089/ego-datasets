@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Set the base directory path
-BASE_DIR="/mas/robots/prg-egocom/EGOCOM/720p/20min/parts/"
+BASE_DIR="/mas/robots/prg-egocom/EGOCOM/720p/5min_parts/parts/"
 
 # Check if the base directory exists
 if [ ! -d "$BASE_DIR" ]; then
@@ -10,7 +10,7 @@ if [ ! -d "$BASE_DIR" ]; then
 fi
 
 # Create output directory if it doesn't exist
-mkdir -p /mas/robots/prg-egocom/EGOCOM/720p/20min/co-tracker/
+mkdir -p /mas/robots/prg-egocom/EGOCOM/720p/5min_parts/co-tracker/
 
 echo "Starting batch processing of videos in parallel (4 GPUs)..."
 echo "Base directory: $BASE_DIR"
@@ -55,7 +55,7 @@ process_group() {
             --video_path "$video_file" \
             --grid_size 30 \
             --grid_query_frame 0 \
-            --save_dir "/mas/robots/prg-egocom/EGOCOM/720p/20min/co-tracker"
+            --save_dir "/mas/robots/prg-egocom/EGOCOM/720p/5min_parts/co-tracker"
         if [ $? -eq 0 ]; then
             echo "[GPU $gpu_id] ✓ Successfully processed $video_basename"
             ((count++))
@@ -88,7 +88,7 @@ for ((gpu=0; gpu<num_gpus; gpu++)); do
         echo "echo \"[GPU $gpu] Processing video: \$video_basename\"" >> $temp_script
         echo "echo \"[GPU $gpu] Video path: \$video_file\"" >> $temp_script
         echo "echo \"[GPU $gpu] Running CoTracker on \$video_basename...\"" >> $temp_script
-        echo "CUDA_VISIBLE_DEVICES=$gpu PYTHONPATH=.. python main.py --video_path \"\$video_file\" --grid_size 30 --grid_query_frame 0 --save_dir \"/mas/robots/prg-egocom/EGOCOM/720p/20min/co-tracker\"" >> $temp_script
+        echo "CUDA_VISIBLE_DEVICES=$gpu PYTHONPATH=.. python main.py --video_path \"\$video_file\" --grid_size 30 --grid_query_frame 0 --save_dir \"/mas/robots/prg-egocom/EGOCOM/720p/5min_parts/co-tracker\"" >> $temp_script
         echo "exit_code=\$?" >> $temp_script
         echo "if [ \$exit_code -eq 0 ]; then" >> $temp_script
         echo "  echo \"[GPU $gpu] ✓ Successfully processed \$video_basename\"" >> $temp_script
@@ -111,4 +111,4 @@ done
 echo "================================"
 echo "Batch processing launched in 4 parallel screen sessions!"
 echo "Use 'screen -ls' to see running sessions. Attach with 'screen -r cotracker_gpuX' (X=0,1,2,3)."
-echo "Output videos saved in: /mas/robots/prg-egocom/EGOCOM/720p/20min/co-tracker/" 
+echo "Output videos saved in: /mas/robots/prg-egocom/EGOCOM/720p/5min_parts/co-tracker/" 
