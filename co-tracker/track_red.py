@@ -65,58 +65,24 @@ def detect_red_circle(image, target_radius: int = 3):
     
     return (center_x, center_y, radius)
 
-def calculate_head_movement(
-    prev_red_pos,
-    curr_red_pos,
-    image_width,
-    image_height,
-    video_fov_degrees=104.0,
-    method: str = "linear",
-    center: tuple = None,
-):
+def calculate_head_movement(prev_red_pos, curr_red_pos, image_width, image_height, video_fov_degrees=104.0):
     if prev_red_pos is None or curr_red_pos is None:
         return None
-
-    if method == "pinhole":
-        # Use pinhole model: x = f * tan(theta). Delta angle = atan(x2/f) - atan(x1/f)
-        if center is None:
-            cx = image_width * 0.5
-            cy = image_height * 0.5
-        else:
-            cx, cy = float(center[0]), float(center[1])
-        hfov_rad = np.radians(float(video_fov_degrees))
-        vfov_rad = hfov_rad  # assume symmetry for circular ROI
-        fx = (image_width * 0.5) / np.tan(hfov_rad * 0.5)
-        fy = (image_height * 0.5) / np.tan(vfov_rad * 0.5)
-
-        x1 = float(prev_red_pos[0]) - cx
-        x2 = float(curr_red_pos[0]) - cx
-        y1 = float(prev_red_pos[1]) - cy
-        y2 = float(curr_red_pos[1]) - cy
-
-        yaw_rad = -(np.arctan2(x2, fx) - np.arctan2(x1, fx))
-        pitch_rad = -(np.arctan2(y2, fy) - np.arctan2(y1, fy))
-
-        return {
-            "horizontal": {"radians": float(yaw_rad), "degrees": float(np.degrees(yaw_rad))},
-            "vertical": {"radians": float(pitch_rad), "degrees": float(np.degrees(pitch_rad))},
-        }
-
-    # Fallback to previous linear-per-pixel mapping
+    
     horizontal_pixel_change = curr_red_pos[0] - prev_red_pos[0]
     vertical_pixel_change = curr_red_pos[1] - prev_red_pos[1]
-
+    
     aspect_ratio = image_width / image_height
     vertical_fov_degrees = video_fov_degrees / aspect_ratio
-
+    
     horizontal_pixels_per_degree = image_width / video_fov_degrees
     horizontal_angle_degrees = -horizontal_pixel_change / horizontal_pixels_per_degree
     horizontal_radians = np.radians(horizontal_angle_degrees)
-
+    
     vertical_pixels_per_degree = image_height / vertical_fov_degrees
     vertical_angle_degrees = -vertical_pixel_change / vertical_pixels_per_degree
     vertical_radians = np.radians(vertical_angle_degrees)
-
+    
     return {
         "horizontal": {
             "radians": horizontal_radians,
