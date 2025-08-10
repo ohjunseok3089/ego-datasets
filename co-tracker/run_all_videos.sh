@@ -1,7 +1,30 @@
 #!/bin/bash
 
 # Set the base directory path
-BASE_DIR="/mas/robots/prg-egocom/EGOCOM/720p/5min_parts/parts/"
+BASE_DIR="/mas/robots/prg-egocom/EGOCOM/720p/20min/parts/"
+
+# Sub-batch control (split each GPU's list into TOTAL_BATCHES parts, run only BATCH_INDEX)
+# Change these as needed or override via env: TOTAL_BATCHES=4 BATCH_INDEX=2 ./run_all_videos.sh
+TOTAL_BATCHES=${TOTAL_BATCHES:-4}
+# Allow BATCH as a shorthand alias for BATCH_INDEX (user convenience)
+if [ -n "$BATCH" ] && [ -z "$BATCH_INDEX" ]; then
+    BATCH_INDEX="$BATCH"
+fi
+BATCH_INDEX=${BATCH_INDEX:-1}
+
+# Validate batch settings
+if ! [[ "$TOTAL_BATCHES" =~ ^[0-9]+$ ]] || ! [[ "$BATCH_INDEX" =~ ^[0-9]+$ ]]; then
+    echo "Error: TOTAL_BATCHES and BATCH_INDEX must be positive integers"
+    exit 1
+fi
+if [ "$TOTAL_BATCHES" -lt 1 ]; then
+    echo "Error: TOTAL_BATCHES must be >= 1"
+    exit 1
+fi
+if [ "$BATCH_INDEX" -lt 1 ] || [ "$BATCH_INDEX" -gt "$TOTAL_BATCHES" ]; then
+    echo "Error: BATCH_INDEX ($BATCH_INDEX) must be in [1, $TOTAL_BATCHES]"
+    exit 1
+fi
 
 # Check if the base directory exists
 if [ ! -d "$BASE_DIR" ]; then
@@ -10,10 +33,11 @@ if [ ! -d "$BASE_DIR" ]; then
 fi
 
 # Create output directory if it doesn't exist
-mkdir -p /mas/robots/prg-egocom/EGOCOM/720p/5min_parts/co-tracker/
+mkdir -p /mas/robots/prg-egocom/EGOCOM/720p/20min/co-tracker/
 
 echo "Starting batch processing of videos in parallel (4 GPUs)..."
 echo "Base directory: $BASE_DIR"
+echo "Batch selection: $BATCH_INDEX / $TOTAL_BATCHES (per-GPU sub-batch)"
 echo "================================"
 
 # Gather all video files into an array (both .mp4 and .MP4)
@@ -74,6 +98,25 @@ for ((gpu=0; gpu<num_gpus; gpu++)); do
     if [ ${#group_videos[@]} -eq 0 ]; then
         continue
     fi
+
+    # Split this GPU's videos into TOTAL_BATCHES sub-batches and pick BATCH_INDEX
+    group_size=${#group_videos[@]}
+    # Ceiling division for per-batch size
+    per_batch=$(( (group_size + TOTAL_BATCHES - 1) / TOTAL_BATCHES ))
+    offset=$(( (BATCH_INDEX - 1) * per_batch ))
+    # Adjust length at tail
+    length=$per_batch
+    end=$(( offset + length ))
+    if [ $end -gt $group_size ]; then
+        length=$(( group_size - offset ))
+    fi
+    if [ $length -le 0 ]; then
+        echo "[GPU $gpu] No videos in this batch (batch $BATCH_INDEX/$TOTAL_BATCHES). Skipping."
+        continue
+    fi
+    group_videos=("${group_videos[@]:$offset:$length}")
+
+    echo "[GPU $gpu] Selected sub-batch $BATCH_INDEX/$TOTAL_BATCHES: ${#group_videos[@]} videos (offset=$offset, size=$length)"
     temp_script="cotracker_gpu${gpu}_run.sh"
     echo "#!/bin/bash" > $temp_script
     echo "count=0" >> $temp_script
@@ -105,7 +148,7 @@ for ((gpu=0; gpu<num_gpus; gpu++)); do
     echo "echo \"[GPU $gpu] Done. Successfully processed: \$count, Failed: \$failed\"" >> $temp_script
     chmod +x $temp_script
     screen -dmS cotracker_gpu$gpu bash -c "./$temp_script &> cotracker_gpu${gpu}.log"
-    echo "Launched screen session 'cotracker_gpu$gpu' for GPU $gpu with ${#group_videos[@]} videos. Log: cotracker_gpu${gpu}.log"
+    echo "Launched screen session 'cotracker_gpu$gpu' for GPU $gpu with ${#group_videos[@]} videos (batch $BATCH_INDEX/$TOTAL_BATCHES). Log: cotracker_gpu${gpu}.log"
 done
 
 echo "================================"

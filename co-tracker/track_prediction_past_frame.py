@@ -120,6 +120,7 @@ def analyze_video_clip(
     frozen_warmup_frames: int = 15,
     position_epsilon_px: float = 0.5,
     diff_mean_threshold: float = 1.0,
+    debug: bool = False,
 ) -> Tuple[List[Dict[str, Any]], List[float], Optional[Dict[str, Any]], Dict[str, Any]]:
     """
     Processes a single video clip, aware of overlapping frames between clips.
@@ -282,6 +283,52 @@ def analyze_video_clip(
                 #     }
                 #     prediction_errors.append(prediction_error["distance"])
 
+        # Draw debug overlays on the full original frame (not cropped)
+        if debug:
+            # Draw ROI rectangle if detected
+            if content_roi is not None:
+                cv2.rectangle(
+                    vis_frame,
+                    (int(roi_x), int(roi_y)),
+                    (int(roi_x + roi_w), int(roi_y + roi_h)),
+                    (0, 255, 255),
+                    2,
+                )
+            # Draw detected red circle (in red)
+            if curr_red_pos is not None:
+                cv2.circle(
+                    vis_frame,
+                    (int(curr_red_pos[0]), int(curr_red_pos[1])),
+                    int(curr_radius) if curr_radius else 6,
+                    (0, 0, 255),
+                    2,
+                )
+            # Draw recalculated position (in green)
+            if recalculated_pos is not None:
+                cv2.circle(
+                    vis_frame,
+                    (int(recalculated_pos[0]), int(recalculated_pos[1])),
+                    int(curr_radius) if curr_radius else 6,
+                    (0, 255, 0),
+                    2,
+                )
+            # Draw previous detected position (small blue dot) if available
+            if prev_red_pos is not None:
+                prev_full_x = int(prev_red_pos[0] + roi_x)
+                prev_full_y = int(prev_red_pos[1] + roi_y)
+                cv2.circle(vis_frame, (prev_full_x, prev_full_y), 3, (255, 0, 0), -1)
+            # Optional text info
+            info_text = f"Frame {global_frame_offset + (frame_idx_in_video - start_processing_frame)}"
+            cv2.putText(
+                vis_frame,
+                info_text,
+                (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (255, 255, 255),
+                2,
+            )
+
         # Add frame info to output (we already skipped to start_processing_frame)
         # Use only source/global frame index for indexing and timestamps
         source_frame_index = global_frame_offset + (frame_idx_in_video - start_processing_frame)
@@ -334,10 +381,12 @@ def convert_to_json_serializable(obj: Any) -> Any:
         return {k: convert_to_json_serializable(v) for k, v in obj.items()}
     if isinstance(obj, list):
         return [convert_to_json_serializable(item) for item in obj]
-    if isinstance(obj, (np.integer, np.int_)):
+    if isinstance(obj, (np.integer,)):
         return int(obj)
-    if isinstance(obj, (np.floating, np.float_)):
+    if isinstance(obj, (np.floating,)):
         return float(obj)
+    if isinstance(obj, (np.bool_,)):
+        return bool(obj)
     if isinstance(obj, float) and np.isnan(obj):
         return None
     return obj
@@ -352,7 +401,12 @@ def main():
     parser.add_argument('--fps', '-f', type=float, help='Override video FPS.')
     parser.add_argument('--show', '-s', action='store_true', help='Show video processing in real-time.')
     parser.add_argument('--fov', '-v', type=float, default=104.0, help='Field of view of the video.')
+    parser.add_argument('--debug', '-d', action='store_true', help='Enable visual debug overlays and real-time display.')
     args = parser.parse_args()
+
+    # Debug implies showing the video in real-time
+    if args.debug:
+        args.show = True
 
     input_path = Path(args.input_dir)
     output_path = Path(args.output_dir)
@@ -402,7 +456,8 @@ def main():
                 output_video_path=output_video_file,
                 fps_override=args.fps,
                 show_video=args.show,
-                video_fov_degrees=args.fov
+                video_fov_degrees=args.fov,
+                debug=args.debug,
             )
             # collect clip-level ROI and frame size
             roi_by_clip[clip_meta["clip_name"]] = clip_meta.get("roi")
