@@ -79,7 +79,7 @@ process_group() {
             --video_path "$video_file" \
             --grid_size 30 \
             --grid_query_frame 0 \
-            --save_dir "/mas/robots/prg-egocom/EGOCOM/720p/20min/co-tracker"
+            --save_dir "/mas/robots/prg-egocom/EGOCOM/720p/5min_parts/co-tracker"
         if [ $? -eq 0 ]; then
             echo "[GPU $gpu_id] ✓ Successfully processed $video_basename"
             ((count++))
@@ -117,7 +117,7 @@ for ((gpu=0; gpu<num_gpus; gpu++)); do
     group_videos=("${group_videos[@]:$offset:$length}")
 
     echo "[GPU $gpu] Selected sub-batch $BATCH_INDEX/$TOTAL_BATCHES: ${#group_videos[@]} videos (offset=$offset, size=$length)"
-    temp_script="cotracker_gpu${gpu}_run.sh"
+    temp_script="cotracker_b${BATCH_INDEX}of${TOTAL_BATCHES}_gpu${gpu}_run.sh"
     echo "#!/bin/bash" > $temp_script
     echo "count=0" >> $temp_script
     echo "failed=0" >> $temp_script
@@ -147,8 +147,8 @@ for ((gpu=0; gpu<num_gpus; gpu++)); do
     done
     echo "echo \"[GPU $gpu] Done. Successfully processed: \$count, Failed: \$failed\"" >> $temp_script
     chmod +x $temp_script
-    screen -dmS cotracker_gpu$gpu bash -c "./$temp_script &> cotracker_gpu${gpu}.log"
-    echo "Launched screen session 'cotracker_gpu$gpu' for GPU $gpu with ${#group_videos[@]} videos (batch $BATCH_INDEX/$TOTAL_BATCHES). Log: cotracker_gpu${gpu}.log"
+    screen -dmS cotracker_b${BATCH_INDEX}of${TOTAL_BATCHES}_gpu$gpu bash -c "./$temp_script &> cotracker_b${BATCH_INDEX}of${TOTAL_BATCHES}_gpu${gpu}.log"
+    echo "Launched screen session 'cotracker_b${BATCH_INDEX}of${TOTAL_BATCHES}_gpu$gpu' for GPU $gpu with ${#group_videos[@]} videos (batch $BATCH_INDEX/$TOTAL_BATCHES). Log: cotracker_b${BATCH_INDEX}of${TOTAL_BATCHES}_gpu${gpu}.log"
 done
 
 echo "================================"
