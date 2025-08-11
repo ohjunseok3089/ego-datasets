@@ -128,7 +128,9 @@ def split_videos(video_base_path, processing_data, output_folder):
                         print(f"  - CREATING clip: {output_filename} from {start_time_sec:.2f}s to {end_time_sec:.2f}s")
 
                         subclip = clip.subclip(start_time_sec, end_time_sec)
-                        subclip.write_videofile(output_path, codec="libx264", audio_codec="aac", logger=None)
+                        subclip.write_videofile(output_path, codec="libx264", audio_codec="aac", logger=None, 
+                                              temp_audiofile='temp-audio.m4a', 
+                                              remove_temp=True, threads=4)
 
                     except Exception as e:
                         print(f"    - ERROR processing time range '{time_range_str}' for {video_file}: {e}")
