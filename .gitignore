@@ -3,4 +3,7 @@
 *.csv
 *.mp4
 *.json
+*.png
+notes.sh
+*.md
 aria/AriaEverydayActivities_download_urls.json

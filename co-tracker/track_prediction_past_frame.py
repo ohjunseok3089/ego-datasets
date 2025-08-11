@@ -19,12 +19,8 @@ from track_red import detect_red_circle, calculate_head_movement, remap_position
 
 def compute_content_roi(frame: np.ndarray, white_threshold: int = 240) -> Optional[Tuple[int, int, int, int]]:
     """
-    Detects the bounding box of the actual video content, excluding solid white
-    letterbox borders. Returns (x, y, w, h) of the content region, or None if
-    a reliable ROI cannot be determined.
-
-    The heuristic treats pixels with grayscale >= white_threshold as white and
-    computes the bounding rectangle around non-white pixels.
+    Region of interest is found by finding the bounding box of the non-white pixels in the frame.
+    returns the top left corner coordinates and the width and height of the region of interest.
     """
     if frame is None or frame.size == 0:
         return None
@@ -119,12 +115,13 @@ def analyze_video_clip(
     fps_override: Optional[float] = None, 
     show_video: bool = False,
     video_fov_degrees: float = 104.0,
-    skip_frozen: bool = True,
+    skip_frozen: bool = False,
     frozen_strategy: str = "circle",  # "circle" or "diff"
     frozen_warmup_frames: int = 15,
     position_epsilon_px: float = 0.5,
     diff_mean_threshold: float = 1.0,
-) -> Tuple[List[Dict[str, Any]], List[float]]:
+    debug: bool = False,
+) -> Tuple[List[Dict[str, Any]], List[float], Optional[Dict[str, Any]], Dict[str, Any]]:
     """
     Processes a single video clip, aware of overlapping frames between clips.
     """
@@ -164,6 +161,13 @@ def analyze_video_clip(
     prev_gray_for_diff = None
     static_counter = 0
     skipped_leading_frames = 0
+    # State for cross-clip overlap handling
+    awaiting_transition_for_prev = False
+    transition_movement_for_prev: Optional[Dict[str, Any]] = None
+
+    # For clip-level metadata
+    clip_level_roi: Optional[Tuple[int, int, int, int]] = None
+    clip_level_frame_size = {"width": width, "height": height}
 
     while True:
         ret, frame = cap.read()
@@ -178,6 +182,7 @@ def analyze_video_clip(
         # Establish content ROI at the first processed frame
         if content_roi is None:
             content_roi = compute_content_roi(frame)
+            clip_level_roi = content_roi
 
         # Select the frame region used for all computations (exclude white borders if detected)
         if content_roi is not None:
@@ -192,6 +197,9 @@ def analyze_video_clip(
             red_circle = detect_red_circle(proc_frame)
             if red_circle:
                 prev_red_pos = (float(red_circle[0]), float(red_circle[1]))  # coords in cropped space
+                # We will use the next frame to compute movement and pass it back to update
+                # the previous batch's last frame's next_movement
+                awaiting_transition_for_prev = True
             frame_idx_in_video += 1
             continue
 
@@ -251,6 +259,11 @@ def analyze_video_clip(
                 roi_h,
                 video_fov_degrees=video_fov_degrees,
             )
+            
+            if awaiting_transition_for_prev and transition_movement_for_prev is None:
+                transition_movement_for_prev = head_movement
+                awaiting_transition_for_prev = False
+
             if head_movement and frame_data:
                 frame_data[-1]['next_movement'] = head_movement
 
@@ -260,29 +273,69 @@ def analyze_video_clip(
                     recalculated_pos_cropped[0] + roi_x,
                     recalculated_pos_cropped[1] + roi_y,
                 ) if recalculated_pos_cropped else None
-                if recalculated_pos:
-                    # Compute error in the cropped coordinate space for numerical stability
-                    error_x = (recalculated_pos[0] - roi_x) - curr_red_pos_cropped[0]
-                    error_y = (recalculated_pos[1] - roi_y) - curr_red_pos_cropped[1]
-                    prediction_error = {
-                        "error_x": float(error_x), "error_y": float(error_y),
-                        "distance": float(np.sqrt(error_x**2 + error_y**2))
-                    }
-                    prediction_errors.append(prediction_error["distance"])
+                # if recalculated_pos:
+                #     # Compute error in the cropped coordinate space for numerical stability
+                #     error_x = (recalculated_pos[0] - roi_x) - curr_red_pos_cropped[0]
+                #     error_y = (recalculated_pos[1] - roi_y) - curr_red_pos_cropped[1]
+                #     prediction_error = {
+                #         "error_x": float(error_x), "error_y": float(error_y),
+                #         "distance": float(np.sqrt(error_x**2 + error_y**2))
+                #     }
+                #     prediction_errors.append(prediction_error["distance"])
+
+        # Draw debug overlays on the full original frame (not cropped)
+        if debug:
+            # Draw ROI rectangle if detected
+            if content_roi is not None:
+                cv2.rectangle(
+                    vis_frame,
+                    (int(roi_x), int(roi_y)),
+                    (int(roi_x + roi_w), int(roi_y + roi_h)),
+                    (0, 255, 255),
+                    2,
+                )
+            # Draw detected red circle (in red)
+            if curr_red_pos is not None:
+                cv2.circle(
+                    vis_frame,
+                    (int(curr_red_pos[0]), int(curr_red_pos[1])),
+                    int(curr_radius) if curr_radius else 6,
+                    (0, 0, 255),
+                    2,
+                )
+            # Draw recalculated position (in green)
+            if recalculated_pos is not None:
+                cv2.circle(
+                    vis_frame,
+                    (int(recalculated_pos[0]), int(recalculated_pos[1])),
+                    int(curr_radius) if curr_radius else 6,
+                    (0, 255, 0),
+                    2,
+                )
+            # Draw previous detected position (small blue dot) if available
+            if prev_red_pos is not None:
+                prev_full_x = int(prev_red_pos[0] + roi_x)
+                prev_full_y = int(prev_red_pos[1] + roi_y)
+                cv2.circle(vis_frame, (prev_full_x, prev_full_y), 3, (255, 0, 0), -1)
+            # Optional text info
+            info_text = f"Frame {global_frame_offset + (frame_idx_in_video - start_processing_frame)}"
+            cv2.putText(
+                vis_frame,
+                info_text,
+                (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (255, 255, 255),
+                2,
+            )
 
         # Add frame info to output (we already skipped to start_processing_frame)
-        processed_frame_index = output_frame_count  # starts at 0 for first emitted frame
+        # Use only source/global frame index for indexing and timestamps
         source_frame_index = global_frame_offset + (frame_idx_in_video - start_processing_frame)
         frame_info = {
-            "frame_index": processed_frame_index,
-            "timestamp": processed_frame_index / fps,
-            "source_frame_index": source_frame_index,
-            "source_timestamp": source_frame_index / fps,
-            "global_frame_index": source_frame_index,
-            "global_timestamp": source_frame_index / fps,
+            "frame_index": source_frame_index,
+            "timestamp": source_frame_index / fps,
             "social_category": social_category,
-            "roi": {"x": roi_x, "y": roi_y, "w": roi_w, "h": roi_h},
-            "frame_size_full": {"width": width, "height": height},
             "red_circle": {
                 "detected": curr_red_pos is not None,
                 "position_full": curr_red_pos,
@@ -291,7 +344,8 @@ def analyze_video_clip(
             },
             "head_movement": head_movement,
             "next_movement": None,
-            "prediction": {"recalculated_position": recalculated_pos, "error": prediction_error}
+            "prediction": {"recalculated_position": recalculated_pos}
+            # "prediction": {"recalculated_position": recalculated_pos, "error": prediction_error}
         }
         frame_data.append(frame_info)
         
@@ -315,17 +369,24 @@ def analyze_video_clip(
     if show_video:
         cv2.destroyAllWindows()
         
-    return frame_data, prediction_errors
+    clip_meta = {
+        "clip_name": str(video_path.name),
+        "roi": {"x": int(clip_level_roi[0]), "y": int(clip_level_roi[1]), "w": int(clip_level_roi[2]), "h": int(clip_level_roi[3])} if clip_level_roi else None,
+        "frame_size_full": clip_level_frame_size,
+    }
+    return frame_data, prediction_errors, transition_movement_for_prev, clip_meta
 
 def convert_to_json_serializable(obj: Any) -> Any:
     if isinstance(obj, dict):
         return {k: convert_to_json_serializable(v) for k, v in obj.items()}
     if isinstance(obj, list):
         return [convert_to_json_serializable(item) for item in obj]
-    if isinstance(obj, (np.integer, np.int_)):
+    if isinstance(obj, (np.integer,)):
         return int(obj)
-    if isinstance(obj, (np.floating, np.float_)):
+    if isinstance(obj, (np.floating,)):
         return float(obj)
+    if isinstance(obj, (np.bool_,)):
+        return bool(obj)
     if isinstance(obj, float) and np.isnan(obj):
         return None
     return obj
@@ -340,7 +401,12 @@ def main():
     parser.add_argument('--fps', '-f', type=float, help='Override video FPS.')
     parser.add_argument('--show', '-s', action='store_true', help='Show video processing in real-time.')
     parser.add_argument('--fov', '-v', type=float, default=104.0, help='Field of view of the video.')
+    parser.add_argument('--debug', '-d', action='store_true', help='Enable visual debug overlays and real-time display.')
     args = parser.parse_args()
+
+    # Debug implies showing the video in real-time
+    if args.debug:
+        args.show = True
 
     input_path = Path(args.input_dir)
     output_path = Path(args.output_dir)
@@ -369,6 +435,9 @@ def main():
         all_frames_data = []
         all_prediction_errors = []
         
+        roi_by_clip: Dict[str, Optional[Dict[str, int]]] = {}
+        frame_size_full_by_clip: Dict[str, Dict[str, int]] = {}
+
         for i, (video_path, info) in enumerate(files_with_info):
             print(f"  - Analyzing clip: {video_path.name}")
             
@@ -376,24 +445,27 @@ def main():
             
             output_video_file = output_path / f"{video_path.stem}_analysis.mp4" if args.save_video else None
             
-            # Calculate expected frames from filename (for last N frames processing)
-            expected_frames = info['end_frame'] - info['start_frame']
-            if expected_frames <= 0:
-                expected_frames = 0  # Process all frames if calculation is invalid
-            
             global_offset = info['processed_start']
 
-            clip_frames, clip_errors = analyze_video_clip(
+            clip_frames, clip_errors, transition_movement_for_prev, clip_meta = analyze_video_clip(
                 video_path=video_path,
                 global_frame_offset=global_offset,
                 social_category=info['social_category'], 
                 is_first_clip_in_group=is_first_clip,
-                last_n_frames=expected_frames,
+                last_n_frames=0,
                 output_video_path=output_video_file,
                 fps_override=args.fps,
                 show_video=args.show,
-                video_fov_degrees=args.fov
+                video_fov_degrees=args.fov,
+                debug=args.debug,
             )
+            # collect clip-level ROI and frame size
+            roi_by_clip[clip_meta["clip_name"]] = clip_meta.get("roi")
+            frame_size_full_by_clip[clip_meta["clip_name"]] = clip_meta.get("frame_size_full", {})
+            # If this clip starts at an overlapped frame, update the last frame
+            # from the previous clip with the computed transition movement
+            if transition_movement_for_prev is not None and len(all_frames_data) > 0:
+                all_frames_data[-1]['next_movement'] = transition_movement_for_prev
             all_frames_data.extend(clip_frames)
             all_prediction_errors.extend(clip_errors)
             
@@ -404,22 +476,45 @@ def main():
         analysis_summary = {
             "total_frames_processed": len(all_frames_data),
             "detected_frames": sum(1 for f in all_frames_data if f["red_circle"]["detected"]),
-            "valid_predictions": len(all_prediction_errors),
+            # "valid_predictions": len(all_prediction_errors),
             "prediction_accuracy": {}
         }
         
-        if all_prediction_errors:
-            analysis_summary["prediction_accuracy"] = {
-                "mean_error_px": np.mean(all_prediction_errors),
-                "median_error_px": np.median(all_prediction_errors),
-                "std_error_px": np.std(all_prediction_errors),
-                "min_error_px": np.min(all_prediction_errors),
-                "max_error_px": np.max(all_prediction_errors)
-            }
+        # if all_prediction_errors:
+        #       analysis_summary["prediction_accuracy"] = {
+        #         "mean_error_px": np.mean(all_prediction_errors),
+        #         "median_error_px": np.median(all_prediction_errors),
+        #         "std_error_px": np.std(all_prediction_errors),
+        #         "min_error_px": np.min(all_prediction_errors),
+        #         "max_error_px": np.max(all_prediction_errors)
+        #     }
         
+        # Consolidate ROI metadata
+        unique_rois = {tuple((v["x"], v["y"], v["w"], v["h"])) for v in roi_by_clip.values() if v is not None}
+        roi_metadata: Dict[str, Any] = {}
+        if len(unique_rois) == 1:
+            only_roi_tuple = next(iter(unique_rois)) if unique_rois else None
+            roi_metadata["roi"] = {"x": only_roi_tuple[0], "y": only_roi_tuple[1], "w": only_roi_tuple[2], "h": only_roi_tuple[3]} if only_roi_tuple else None
+        else:
+            roi_metadata["roi_by_clip"] = roi_by_clip
+
+        # Consolidate frame size metadata
+        unique_sizes = {tuple((v.get("width"), v.get("height"))) for v in frame_size_full_by_clip.values() if v}
+        size_metadata: Dict[str, Any] = {}
+        if len(unique_sizes) == 1:
+            only_size_tuple = next(iter(unique_sizes)) if unique_sizes else None
+            size_metadata["frame_size_full"] = {"width": only_size_tuple[0], "height": only_size_tuple[1]} if only_size_tuple else None
+        else:
+            size_metadata["frame_size_full_by_clip"] = frame_size_full_by_clip
+
         output_json_path = output_path / f"{group_id}_analysis.json"
         final_output_data = {
-            "metadata": {"group_id": group_id, "analysis_type": "past_frame_prediction"},
+            "metadata": {
+                "group_id": group_id,
+                "analysis_type": "past_frame_prediction",
+                **roi_metadata,
+                **size_metadata,
+            },
             "analysis_summary": analysis_summary,
             "frames": all_frames_data
         }
