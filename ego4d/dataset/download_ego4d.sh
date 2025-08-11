@@ -28,7 +28,7 @@ echo "================================"
 
 # Step 1: Download annotations (only once)
 echo "Step 1: Downloading annotations..."
-ego4d --output_directory "$OUTPUT_DIR" --datasets annotations -y
+ego4d --output_directory "$OUTPUT_DIR" --datasets annotations -y --aws_profile_name ego4d
 
 if [ $? -eq 0 ]; then
     echo "✓ Annotations downloaded successfully"
@@ -51,7 +51,7 @@ for uid in "${VIDEO_UIDS[@]}"; do
     echo "Downloading video: $uid"
     echo "Progress: $((success_count + failed_count + 1))/${#VIDEO_UIDS[@]}"
     
-    ego4d --output_directory "$OUTPUT_DIR" --datasets full_scale --video_uids "$uid" -y
+    ego4d --output_directory "$OUTPUT_DIR" --datasets full_scale --video_uids "$uid" -y --aws_profile_name ego4d
     
     if [ $? -eq 0 ]; then
         echo "✓ Successfully downloaded: $uid"
