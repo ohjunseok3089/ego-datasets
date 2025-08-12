@@ -13,13 +13,16 @@ Mappings are derived from `notes.sh` and embedded below. Some entries include
 rows to delete (e.g., "delete person_1, person_2").
 
 Usage:
-  python face_tracking_speaker_id_mapping.py INPUT_PATH [--output-dir DIR | --inplace]
+  python face_tracking_speaker_id_mapping.py INPUT_PATH [--output-dir DIR | --inplace] [--mode face|body]
 
   - INPUT_PATH: a CSV file or a directory containing CSVs
   - --output-dir: directory to write updated CSVs (defaults to same dir)
   - --inplace: overwrite input files (mutually exclusive with --output-dir)
   - --suffix: filename suffix before .csv when not using --inplace (default: _with_speaker)
   - --dry-run: don't write files; just print summary
+
+For both modes, a small JSON summary is written alongside outputs, named by the
+video base (e.g., 'vid_..._part1.json').
 """
 
 from __future__ import annotations
@@ -335,7 +338,73 @@ def apply_mapping(df: pd.DataFrame, key: str) -> Tuple[pd.DataFrame, dict]:
     return df, stats
 
 
-def process_csv_file(csv_path: str, output_dir: Optional[str], inplace: bool, suffix: str, dry_run: bool) -> None:
+def _derive_json_basename(csv_path: str) -> str:
+    base = os.path.basename(csv_path)
+    stem, _ = os.path.splitext(base)
+    # Drop known suffixes like _global_gallery or _detections
+    stem = re.sub(r"_(global_gallery|detections)$", "", stem)
+    return stem
+
+
+def _write_summary_json(out_dir: str, csv_path: str, key: Optional[str], stats: dict, mode: str, output_csv_path: str, dry_run: bool) -> None:
+    json_name = f"{_derive_json_basename(csv_path)}.json"
+    json_path = os.path.join(out_dir, json_name)
+    summary = {
+        "input_csv": csv_path,
+        "output_csv": output_csv_path,
+        "mode": mode,
+        "mapping_key": key,
+        "stats": stats,
+    }
+    if dry_run:
+        print(f"  -> (dry-run) Would write summary JSON: {json_path}")
+        return
+    try:
+        import json as _json
+        with open(json_path, "w") as f:
+            _json.dump(summary, f, indent=2)
+        print(f"  -> Wrote summary JSON: {json_path}")
+    except Exception as e:
+        print(f"[WARN] Failed to write summary JSON '{json_path}': {e}")
+
+
+def _apply_mapping_face(df: pd.DataFrame, key: str) -> Tuple[pd.DataFrame, dict]:
+    return apply_mapping(df, key)
+
+
+def _apply_mapping_body(df: pd.DataFrame, key: str) -> Tuple[pd.DataFrame, dict]:
+    stats = {"deleted_rows": 0, "mapped_rows": 0, "unmapped_rows": 0}
+
+    if key not in MAPPINGS:
+        df = df.copy()
+        df["speaker_id"] = np.nan
+        stats["unmapped_rows"] = len(df)
+        return df, stats
+
+    spec = MAPPINGS[key]
+    df = df.copy()
+
+    # Normalize class_name to person_* labels for filtering/mapping
+    norm = df.get("class_name")
+    if norm is None:
+        # Fallback to person_id if present (rare in body files)
+        norm = df.get("person_id")
+    norm_ids = norm.apply(normalize_person_id) if norm is not None else pd.Series([None] * len(df))
+
+    if spec.delete_persons:
+        delete_mask = norm_ids.isin(set(spec.delete_persons))
+        stats["deleted_rows"] = int(delete_mask.sum())
+        df = df.loc[~delete_mask].reset_index(drop=True)
+        norm_ids = norm_ids.loc[~delete_mask].reset_index(drop=True)
+
+    mapped = norm_ids.map(spec.person_to_speaker)
+    df["speaker_id"] = mapped
+    stats["mapped_rows"] = int(mapped.notna().sum())
+    stats["unmapped_rows"] = int(mapped.isna().sum())
+    return df, stats
+
+
+def process_csv_file(csv_path: str, output_dir: Optional[str], inplace: bool, suffix: str, dry_run: bool, mode: str) -> None:
     if not os.path.isfile(csv_path) or not csv_path.lower().endswith(".csv"):
         print(f"Skipping non-CSV: {csv_path}")
         return
@@ -350,12 +419,19 @@ def process_csv_file(csv_path: str, output_dir: Optional[str], inplace: bool, su
         print(f"[ERROR] Failed to read CSV '{csv_path}': {e}")
         return
 
-    required_cols = {"frame_number", "person_id", "x1", "y1", "x2", "y2"}
-    missing = [c for c in required_cols if c not in df.columns]
-    if missing:
-        print(f"[WARN] '{os.path.basename(csv_path)}' missing columns {missing}; continuing with available columns.")
-
-    df_out, stats = apply_mapping(df, key or "")
+    if mode == "face":
+        required_cols = {"frame_number", "person_id", "x1", "y1", "x2", "y2"}
+        missing = [c for c in required_cols if c not in df.columns]
+        if missing:
+            print(f"[WARN] '{os.path.basename(csv_path)}' missing columns {missing}; continuing with available columns.")
+        df_out, stats = _apply_mapping_face(df, key or "")
+    else:
+        # body mode
+        required_cols = {"frame", "class_name", "x1", "y1", "x2", "y2"}
+        missing = [c for c in required_cols if c not in df.columns]
+        if missing:
+            print(f"[WARN] (body) '{os.path.basename(csv_path)}' missing columns {missing}; continuing with available columns.")
+        df_out, stats = _apply_mapping_body(df, key or "")
 
     # Decide output path
     if inplace:
@@ -368,7 +444,11 @@ def process_csv_file(csv_path: str, output_dir: Optional[str], inplace: bool, su
         out_path = os.path.join(out_dir, f"{stem}{suffix}{ext}")
 
     # Report
-    print(f"Processed: {os.path.basename(csv_path)} | key={key or 'N/A'} | mapped={stats['mapped_rows']} | unmapped={stats['unmapped_rows']} | deleted={stats['deleted_rows']}")
+    print(f"Processed ({mode}): {os.path.basename(csv_path)} | key={key or 'N/A'} | mapped={stats['mapped_rows']} | unmapped={stats['unmapped_rows']} | deleted={stats['deleted_rows']}")
+
+    # Write summary JSON named by video base (without gallery/detections suffix)
+    summary_out_dir = output_dir or os.path.dirname(csv_path)
+    _write_summary_json(summary_out_dir, csv_path, key, stats, mode, out_path, dry_run)
 
     if dry_run:
         return
@@ -381,15 +461,15 @@ def process_csv_file(csv_path: str, output_dir: Optional[str], inplace: bool, su
         print(f"[ERROR] Failed to write '{out_path}': {e}")
 
 
-def process_path(input_path: str, output_dir: Optional[str], inplace: bool, suffix: str, dry_run: bool) -> None:
+def process_path(input_path: str, output_dir: Optional[str], inplace: bool, suffix: str, dry_run: bool, mode: str) -> None:
     if os.path.isfile(input_path):
-        process_csv_file(input_path, output_dir, inplace, suffix, dry_run)
+        process_csv_file(input_path, output_dir, inplace, suffix, dry_run, mode)
         return
     if os.path.isdir(input_path):
         for root, _, files in os.walk(input_path):
             for name in files:
                 if name.lower().endswith(".csv"):
-                    process_csv_file(os.path.join(root, name), output_dir, inplace, suffix, dry_run)
+                    process_csv_file(os.path.join(root, name), output_dir, inplace, suffix, dry_run, mode)
         return
     print(f"[ERROR] Input path is not a file or directory: {input_path}")
 
@@ -400,6 +480,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--output-dir", type=str, default=None, help="Directory to write outputs (default: same as input)")
     p.add_argument("--inplace", action="store_true", help="Overwrite input files in place")
     p.add_argument("--suffix", type=str, default="_with_speaker", help="Suffix for output filenames when not using --inplace")
+    p.add_argument("--mode", type=str, choices=["face", "body"], default="face", help="Input CSV mode: face or body detection")
     p.add_argument("--dry-run", action="store_true", help="Don't write files; print what would happen")
     args = p.parse_args()
 
@@ -410,7 +491,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    process_path(args.input_path, args.output_dir, args.inplace, args.suffix, args.dry_run)
+    process_path(args.input_path, args.output_dir, args.inplace, args.suffix, args.dry_run, args.mode)
 
 
 if __name__ == "__main__":
