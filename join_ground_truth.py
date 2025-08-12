@@ -80,18 +80,93 @@ def parse_video_path(video_path):
     print("------------------------------------")
     return paths
 
-def preprocess_transcriptions(transcriptions_df, conversation_id_substr):
+
+def parse_conversation_id_from_name(video_basename: str) -> str:
+    match = re.search(r'(day_\d+__con_\d+)', video_basename)
+    if not match:
+        return ''
+    return match.group(1)
+
+
+def parse_frame_range_from_name(video_basename: str):
+    # e.g., vid_...part1(1980_2370_social_interaction)
+    paren = re.search(r'\(([^)]*)\)', video_basename)
+    if not paren:
+        return None
+    inner = paren.group(1)
+    parts = inner.split('_')
+    if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
+        return int(parts[0]), int(parts[1])
+    return None
+
+
+def derive_paths_from_args(base_video: str, face_csv: str, body_csv: str, co_tracker_json: str, transcript_csv: str, output_json: str = None):
+    """Build paths_info dict from explicit arguments; does not validate existence here."""
+    video_basename = os.path.basename(base_video.rstrip('/'))
+    conversation_id_substr = parse_conversation_id_from_name(video_basename)
+    frame_range = parse_frame_range_from_name(video_basename)
+
+    if output_json is None:
+        # Derive EGOCOM root from co-tracker or face path
+        candidate_root = None
+        for p in [co_tracker_json, face_csv, body_csv, transcript_csv, base_video]:
+            if p:
+                try:
+                    # Find '/EGOCOM/' in the path and take up to it
+                    idx = p.find('/EGOCOM/')
+                    if idx != -1:
+                        candidate_root = p[: idx + len('/EGOCOM/') - 1]
+                        break
+                except Exception:
+                    pass
+        if candidate_root is None:
+            candidate_root = os.path.dirname(os.path.dirname(co_tracker_json)) if co_tracker_json else os.getcwd()
+        output_dir = os.path.join(candidate_root, 'joined_ground_truth')
+        os.makedirs(output_dir, exist_ok=True)
+        output_json = os.path.join(output_dir, f"{video_basename}.json")
+
+    return {
+        'angular_json_path': co_tracker_json,
+        'transcriptions_csv_path': transcript_csv,
+        'head_tracking_csv_path': face_csv,
+        'body_detection_csv_path': body_csv,
+        'output_joined_json_path': output_json,
+        'conversation_id_substr': conversation_id_substr,
+        'video_basename': video_basename,
+        'frame_range': frame_range,
+        'base_video_path': base_video,
+    }
+
+def preprocess_transcriptions(transcriptions_df, conversation_id_substr, frame_range=None):
     """
     Filters transcription data and maps spoken words to their starting frame number.
     """
-    conv_df = transcriptions_df[transcriptions_df['conversation_id'].str.contains(conversation_id_substr, na=False)].copy()
-    conv_df.dropna(subset=['startTime', 'endTime', 'speaker_id', 'word'], inplace=True)
-    conv_df['speaker_id'] = conv_df['speaker_id'].astype(int)
-    conv_df['start_frame'] = (conv_df['startTime'] * FPS).apply(math.floor)
+    conv_df = transcriptions_df[transcriptions_df['conversation_id'].astype(str).str.contains(conversation_id_substr, na=False)].copy()
+    # Two options: already has frame index or needs to compute from startTime
+    has_frame_col = 'frame' in conv_df.columns or 'frame_number' in conv_df.columns or 'start_frame' in conv_df.columns
+    if not has_frame_col:
+        conv_df.dropna(subset=['startTime', 'endTime', 'speaker_id', 'word'], inplace=True)
+        conv_df['speaker_id'] = conv_df['speaker_id'].astype(int)
+        conv_df['start_frame'] = (conv_df['startTime'] * FPS).apply(math.floor)
+        frame_col = 'start_frame'
+    else:
+        # Standardize to 'start_frame'
+        conv_df = _standardize_columns(conv_df)
+        if 'frame' in conv_df.columns:
+            conv_df.rename(columns={'frame': 'start_frame'}, inplace=True)
+        elif 'frame_number' in conv_df.columns:
+            conv_df.rename(columns={'frame_number': 'start_frame'}, inplace=True)
+        if 'speaker_id' in conv_df.columns:
+            conv_df['speaker_id'] = conv_df['speaker_id'].astype(int)
+        frame_col = 'start_frame'
+
+    if frame_range is not None:
+        start_f, end_f = frame_range
+        conv_df = conv_df[(conv_df[frame_col] >= start_f) & (conv_df[frame_col] <= end_f)]
 
     speaker_events_by_frame = {}
     for _, row in conv_df.iterrows():
-        frame_idx = row['start_frame']
+        frame_idx = int(row['start_frame'])
         event = {'id': row['speaker_id'], 'word': str(row['word'])}
         speaker_events_by_frame.setdefault(frame_idx, []).append(event)
         
@@ -238,31 +313,44 @@ def _predict_speaker_position(head_tracking_df: pd.DataFrame, angular_frames_by_
     return {'x': current_pos[0], 'y': current_pos[1]}
 
 
-def process_video(video_path):
+def process_video(video_path=None, base_video=None, face_csv=None, body_csv=None, co_tracker_json=None, transcript_csv=None, output_json=None):
     """
     Main function to orchestrate the data loading, processing, and saving.
     """
-    try:
-        paths_info = parse_video_path(video_path)
-    except (FileNotFoundError, ValueError) as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
+    # Determine paths
+    if co_tracker_json or face_csv or transcript_csv or body_csv or base_video:
+        # Use explicit arguments
+        if not (base_video and co_tracker_json and transcript_csv and face_csv):
+            print("Error: When using explicit arguments, please provide --base_video, --co_tracker_json, --transcript_csv, and --face_csv. --body_csv is optional.", file=sys.stderr)
+            sys.exit(1)
+        paths_info = derive_paths_from_args(base_video, face_csv, body_csv, co_tracker_json, transcript_csv, output_json)
+    else:
+        if not video_path:
+            print("Error: Provide either a single video_path or explicit arguments.", file=sys.stderr)
+            sys.exit(1)
+        try:
+            paths_info = parse_video_path(video_path)
+        except (FileNotFoundError, ValueError) as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
 
-    print("\nReading video properties...")
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        print(f"FATAL: Could not open video file to read properties: {video_path}", file=sys.stderr)
-        sys.exit(1)
-    img_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    img_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    # Try to fetch fps and frame count from video (fallback to constants)
-    fps_read = cap.get(cv2.CAP_PROP_FPS) or FPS
-    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-    cap.release()
-    if img_width == 0 or img_height == 0:
-        print(f"FATAL: Video file has invalid dimensions (0x0): {video_path}", file=sys.stderr)
-        sys.exit(1)
-    print(f"Detected video dimensions: {img_width}x{img_height}")
+    # Attempt to read video properties only if a concrete video file is provided and exists
+    img_width = img_height = None
+    fps_read = FPS
+    frame_count = 0
+    if video_path and os.path.isfile(video_path):
+        print("\nReading video properties...")
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            print(f"Warning: Could not open video file to read properties: {video_path}")
+        else:
+            img_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            img_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            fps_read = cap.get(cv2.CAP_PROP_FPS) or FPS
+            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+            cap.release()
+            if img_width and img_height:
+                print(f"Detected video dimensions: {img_width}x{img_height}")
 
     print("\nLoading data sources...")
     try:
@@ -277,18 +365,27 @@ def process_video(video_path):
 
     # Load optional body detections
     body_df = None
-    if os.path.isfile(paths_info['body_detection_csv_path']):
+    if paths_info.get('body_detection_csv_path') and os.path.isfile(paths_info['body_detection_csv_path']):
         try:
             body_df = pd.read_csv(paths_info['body_detection_csv_path'])
         except Exception as e:
             print(f"Warning: Failed to read body detections: {e}")
             body_df = None
     else:
-        print(f"Warning: Body detection CSV not found at {paths_info['body_detection_csv_path']}. Continuing without it.")
+        if paths_info.get('body_detection_csv_path'):
+            print(f"Warning: Body detection CSV not found at {paths_info['body_detection_csv_path']}. Continuing without it.")
 
     print("Preprocessing data for efficient lookup...")
-    speaker_events_by_frame = preprocess_transcriptions(transcriptions_df, paths_info['conversation_id_substr'])
+    speaker_events_by_frame = preprocess_transcriptions(transcriptions_df, paths_info.get('conversation_id_substr', ''), paths_info.get('frame_range'))
     # Prepare indices and per-frame groupings for efficient lookup
+    # Apply frame range filtering to detections if present
+    if paths_info.get('frame_range') is not None:
+        start_f, end_f = paths_info['frame_range']
+        if 'frame_number' in head_tracking_df.columns:
+            head_tracking_df = head_tracking_df[(head_tracking_df['frame_number'] >= start_f) & (head_tracking_df['frame_number'] <= end_f)]
+        if body_df is not None and 'frame_number' in body_df.columns:
+            body_df = body_df[(body_df['frame_number'] >= start_f) & (body_df['frame_number'] <= end_f)]
+
     if set(['frame_number', 'person_id']).issubset(head_tracking_df.columns):
         head_tracking_multiindex = head_tracking_df.set_index(['frame_number', 'person_id'])
     else:
@@ -349,8 +446,8 @@ def process_video(video_path):
 
     output_joined = {
         'metadata': {
-            'video_name': os.path.splitext(os.path.basename(video_path))[0],
-            'video_path': video_path,
+            'video_name': paths_info.get('video_basename') or (os.path.splitext(os.path.basename(video_path))[0] if video_path else None),
+            'video_path': video_path or paths_info.get('base_video_path'),
             'video_duration': int(round(frame_count / (fps_read or FPS))) if frame_count > 0 else None,
             'video_fps': fps_read or FPS,
             'roi': metadata.get('roi'),
