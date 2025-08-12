@@ -137,7 +137,7 @@ def derive_paths_from_args(base_video: str, face_csv: str, body_csv: str, co_tra
         'base_video_path': base_video,
     }
 
-def preprocess_transcriptions(transcriptions_df, conversation_id_substr, frame_range=None):
+def preprocess_transcriptions(transcriptions_df, conversation_id_substr, frame_range=None, fps: float = FPS):
     """
     Build a mapping: frame_index -> list of {id, word} events from transcript.
 
@@ -205,7 +205,7 @@ def preprocess_transcriptions(transcriptions_df, conversation_id_substr, frame_r
     else:
         # Compute from times
         conv_df.dropna(subset=['startTime', 'speaker_id', 'word'], inplace=True)
-        conv_df['start_frame'] = (pd.to_numeric(conv_df['startTime'], errors='coerce') * FPS).apply(math.floor)
+        conv_df['start_frame'] = (pd.to_numeric(conv_df['startTime'], errors='coerce') * fps).apply(math.floor)
         frame_col = 'start_frame'
 
     # Ensure numeric type for comparison
@@ -216,7 +216,7 @@ def preprocess_transcriptions(transcriptions_df, conversation_id_substr, frame_r
 
     for _, row in conv_df.iterrows():
         add_event(row.get(frame_col), row.get('speaker_id'), row.get('word'))
-
+        
     return speaker_events_by_frame
 
 def _standardize_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -356,47 +356,12 @@ def _find_speaker_bbox_in_frame(head_tracking_df: pd.DataFrame, frame_index: int
     return None
 
 
-def _predict_speaker_position(head_tracking_df: pd.DataFrame, angular_frames_by_index: dict, img_width: int, img_height: int, current_frame_index: int, speaker_id: int):
-    """Predict speaker position when not detected in the current frame using past frame and head-movement remapping."""
-    if head_tracking_df is None or head_tracking_df.empty or speaker_id is None:
-        return None
-
-    # Build a candidate series of past frames for this speaker
-    df = head_tracking_df.copy()
-    df = _standardize_columns(df)
-
-    # Prefer explicit speaker_id column; else fall back to person_id
-    id_col = 'speaker_id' if 'speaker_id' in df.columns else ('person_id' if 'person_id' in df.columns else None)
-    if id_col is None or 'frame_number' not in df.columns:
-        return None
-
-    # If numeric variant exists, use it
-    id_num_col = f'{id_col}_num' if f'{id_col}_num' in df.columns else id_col
-    speaker_df = df[df[id_num_col] == speaker_id]
-    past_frames = speaker_df[speaker_df['frame_number'] < current_frame_index]
-    if past_frames.empty:
-        return None
-
-    last_row = past_frames.sort_values('frame_number').iloc[-1]
-    last_known_frame_index = int(last_row['frame_number'])
-    x1, y1, x2, y2 = [float(last_row[k]) for k in ['x1', 'y1', 'x2', 'y2']]
-    current_pos = [(x1 + x2) / 2.0, (y1 + y2) / 2.0]
-
-    for frame_idx in range(last_known_frame_index, current_frame_index):
-        if frame_idx in angular_frames_by_index:
-            frame_to_remap_from = angular_frames_by_index[frame_idx]
-            if frame_to_remap_from.get('head_movement'):
-                current_pos = remap_position_from_movement(
-                    start_pos=current_pos,
-                    head_movement=frame_to_remap_from['head_movement'],
-                    image_width=img_width,
-                    image_height=img_height,
-                    video_fov_degrees=VIDEO_FOV_DEGREES,
-                )
-    return {'x': current_pos[0], 'y': current_pos[1]}
+def _predict_speaker_position(*args, **kwargs):
+    # Deprecated per updated requirements; keep stub for compatibility.
+    return None
 
 
-def process_video(video_path=None, base_video=None, face_csv=None, body_csv=None, co_tracker_json=None, transcript_csv=None, output_json=None):
+def process_video(video_path=None, base_video=None, face_csv=None, body_csv=None, co_tracker_json=None, transcript_csv=None, output_json=None, fps: float = FPS):
     """
     Main function to orchestrate the data loading, processing, and saving.
     """
@@ -419,7 +384,7 @@ def process_video(video_path=None, base_video=None, face_csv=None, body_csv=None
 
     # Attempt to read video properties only if a concrete video file is provided and exists
     img_width = img_height = None
-    fps_read = FPS
+    fps_read = fps or FPS
     frame_count = 0
     if video_path and os.path.isfile(video_path):
         print("\nReading video properties...")
@@ -459,7 +424,7 @@ def process_video(video_path=None, base_video=None, face_csv=None, body_csv=None
             print(f"Warning: Body detection CSV not found at {paths_info['body_detection_csv_path']}. Continuing without it.")
 
     print("Preprocessing data for efficient lookup...")
-    speaker_events_by_frame = preprocess_transcriptions(transcriptions_df, paths_info.get('conversation_id_substr', ''), paths_info.get('frame_range'))
+    speaker_events_by_frame = preprocess_transcriptions(transcriptions_df, paths_info.get('conversation_id_substr', ''), paths_info.get('frame_range'), fps=fps_read)
     # Prepare indices and per-frame groupings for efficient lookup
     # Apply frame range filtering to detections if present
     if paths_info.get('frame_range') is not None:
@@ -503,24 +468,16 @@ def process_video(video_path=None, base_video=None, face_csv=None, body_csv=None
 
         # Defaults
         out_frame['speaker_id'] = None
-        out_frame['speaker_words'] = []
         out_frame['speaker_location'] = {}
-        out_frame['predicted_speaker_location'] = {}
 
         if current_frame_index in speaker_events_by_frame:
             speaker_events = speaker_events_by_frame[current_frame_index]
             if speaker_events:
                 speaker_id = speaker_events[0]['id']
                 out_frame['speaker_id'] = speaker_id
-                out_frame['speaker_words'] = [evt['word'] for evt in speaker_events if evt['id'] == speaker_id]
-
                 loc = _find_speaker_bbox_in_frame(head_tracking_multiindex if isinstance(head_tracking_multiindex, pd.DataFrame) else head_tracking_df, current_frame_index, speaker_id)
                 if loc:
                     out_frame['speaker_location'] = loc
-                else:
-                    pred = _predict_speaker_position(head_tracking_df, angular_frames_by_index, img_width, img_height, current_frame_index, speaker_id)
-                    if pred:
-                        out_frame['predicted_speaker_location'] = pred
 
         # Attach detections for the frame
         out_frame['face_detection'] = faces_by_frame.get(current_frame_index, [])
@@ -577,6 +534,7 @@ if __name__ == "__main__":
     parser.add_argument("--co_tracker_json", type=str, help="Path to co-tracker ground-truth JSON.")
     parser.add_argument("--transcript_csv", type=str, help="Path to transcript CSV (with frames or startTime).")
     parser.add_argument("--output_json", type=str, default=None, help="Optional output path for joined JSON.")
+    parser.add_argument("--fps", type=float, default=30.0, help="Frames per second for timestamp/frame computations (default 30).")
     
     try:
         import pandas as pd
@@ -598,4 +556,5 @@ if __name__ == "__main__":
         co_tracker_json=args.co_tracker_json,
         transcript_csv=args.transcript_csv,
         output_json=args.output_json,
+        fps=float(args.fps),
     )
