@@ -139,37 +139,84 @@ def derive_paths_from_args(base_video: str, face_csv: str, body_csv: str, co_tra
 
 def preprocess_transcriptions(transcriptions_df, conversation_id_substr, frame_range=None):
     """
-    Filters transcription data and maps spoken words to their starting frame number.
+    Build a mapping: frame_index -> list of {id, word} events from transcript.
+
+    Supports two formats:
+    - CSV with 'frame' column containing JSON arrays (e.g., "[2,3,4]")
+    - CSV with times: compute start_frame from startTime
     """
     conv_df = transcriptions_df[transcriptions_df['conversation_id'].astype(str).str.contains(conversation_id_substr, na=False)].copy()
-    # Two options: already has frame index or needs to compute from startTime
-    has_frame_col = 'frame' in conv_df.columns or 'frame_number' in conv_df.columns or 'start_frame' in conv_df.columns
-    if not has_frame_col:
-        conv_df.dropna(subset=['startTime', 'endTime', 'speaker_id', 'word'], inplace=True)
-        conv_df['speaker_id'] = conv_df['speaker_id'].astype(int)
-        conv_df['start_frame'] = (conv_df['startTime'] * FPS).apply(math.floor)
+    speaker_events_by_frame = {}
+
+    def add_event(frame_idx: int, speaker_id_val, word_val):
+        if frame_idx is None or pd.isna(frame_idx):
+            return
+        try:
+            frame_i = int(frame_idx)
+        except Exception:
+            return
+        try:
+            spk = int(speaker_id_val)
+        except Exception:
+            return
+        event = {'id': spk, 'word': str(word_val)}
+        speaker_events_by_frame.setdefault(frame_i, []).append(event)
+
+    # Case A: has 'frame' column with JSON arrays or numeric
+    if 'frame' in conv_df.columns:
+        for _, row in conv_df.iterrows():
+            word_val = row.get('word')
+            speaker_id_val = row.get('speaker_id')
+            frames_field = row.get('frame')
+            frames_list = []
+            if isinstance(frames_field, (list, tuple)):
+                frames_list = list(frames_field)
+            elif isinstance(frames_field, (int, float)) and not pd.isna(frames_field):
+                frames_list = [int(frames_field)]
+            elif isinstance(frames_field, str):
+                # Expect a JSON array string; handle single int strings too
+                try:
+                    parsed = json.loads(frames_field)
+                    if isinstance(parsed, list):
+                        frames_list = parsed
+                    elif isinstance(parsed, (int, float)):
+                        frames_list = [int(parsed)]
+                except Exception:
+                    # Fallback: try to coerce to int
+                    try:
+                        frames_list = [int(frames_field)]
+                    except Exception:
+                        frames_list = []
+
+            if frame_range is not None and frames_list:
+                start_f, end_f = frame_range
+                frames_list = [f for f in frames_list if isinstance(f, (int, float)) and start_f <= int(f) <= end_f]
+
+            for fi in frames_list:
+                add_event(fi, speaker_id_val, word_val)
+        return speaker_events_by_frame
+
+    # Case B: has explicit frame_number or start_frame columns
+    conv_df = _standardize_columns(conv_df)
+    if 'frame_number' in conv_df.columns:
+        frame_col = 'frame_number'
+    elif 'start_frame' in conv_df.columns:
         frame_col = 'start_frame'
     else:
-        # Standardize to 'start_frame'
-        conv_df = _standardize_columns(conv_df)
-        if 'frame' in conv_df.columns:
-            conv_df.rename(columns={'frame': 'start_frame'}, inplace=True)
-        elif 'frame_number' in conv_df.columns:
-            conv_df.rename(columns={'frame_number': 'start_frame'}, inplace=True)
-        if 'speaker_id' in conv_df.columns:
-            conv_df['speaker_id'] = conv_df['speaker_id'].astype(int)
+        # Compute from times
+        conv_df.dropna(subset=['startTime', 'speaker_id', 'word'], inplace=True)
+        conv_df['start_frame'] = (pd.to_numeric(conv_df['startTime'], errors='coerce') * FPS).apply(math.floor)
         frame_col = 'start_frame'
 
+    # Ensure numeric type for comparison
+    conv_df[frame_col] = pd.to_numeric(conv_df[frame_col], errors='coerce')
     if frame_range is not None:
         start_f, end_f = frame_range
         conv_df = conv_df[(conv_df[frame_col] >= start_f) & (conv_df[frame_col] <= end_f)]
 
-    speaker_events_by_frame = {}
     for _, row in conv_df.iterrows():
-        frame_idx = int(row['start_frame'])
-        event = {'id': row['speaker_id'], 'word': str(row['word'])}
-        speaker_events_by_frame.setdefault(frame_idx, []).append(event)
-        
+        add_event(row.get(frame_col), row.get('speaker_id'), row.get('word'))
+
     return speaker_events_by_frame
 
 def _standardize_columns(df: pd.DataFrame) -> pd.DataFrame:
