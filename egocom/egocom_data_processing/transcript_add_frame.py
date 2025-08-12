@@ -86,6 +86,15 @@ def add_frame_column(
     else:
         df["endTime"] = np.nan
 
+    # Forward-fill missing times with the most recent valid values.
+    # Do this per conversation to avoid leaking times across different convs.
+    if "conversation_id" in df.columns:
+        df[["startTime", "endTime"]] = (
+            df.groupby("conversation_id")[['startTime', 'endTime']].ffill()
+        )
+    else:
+        df[["startTime", "endTime"]] = df[["startTime", "endTime"]].ffill()
+
     def _compute_row_frames(row) -> str:
         frames = compute_frame_range(
             start_time_s=float(row["startTime"]),
