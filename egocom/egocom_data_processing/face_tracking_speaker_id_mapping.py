@@ -112,6 +112,155 @@ MAPPINGS: Dict[str, MappingSpec] = {
         delete_persons=("person_2",),
     ),
     "day_2__con_2__person_2": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2], 3)}),
+
+    # day_2__con_3
+    "day_2__con_3__person_1": MappingSpec(person_to_speaker={**_p([1], 3), **_p([2], 2)}),
+    "day_2__con_3__person_2": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2], 3)}),
+
+    # day_2__con_4
+    "day_2__con_4__person_1": MappingSpec(person_to_speaker={**_p([1], 2), **_p([2], 3)}),
+    "day_2__con_4__person_2": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2], 3)}),
+    "day_2__con_4__person_3": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2], 2)}),
+
+    # day_2__con_5
+    "day_2__con_5__person_1": MappingSpec(person_to_speaker={**_p([1], 2), **_p([2], 3)}),
+    "day_2__con_5__person_2": MappingSpec(person_to_speaker={**_p([1], 3), **_p([2], 1)}, delete_persons=("person_3",)),
+    "day_2__con_5__person_3": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2], 2)}),
+
+    # day_2__con_6
+    "day_2__con_6__person_1": MappingSpec(person_to_speaker={**_p([1], 2), **_p([2], 3)}),
+    "day_2__con_6__person_3": MappingSpec(person_to_speaker={**_p([1], 2), **_p([2], 1)}),
+
+    # day_2__con_7
+    "day_2__con_7__person_1": MappingSpec(person_to_speaker={**_p([1], 2), **_p([2], 3)}),
+    "day_2__con_7__person_2": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2], 3)}),
+
+    # day_3__con_1
+    "day_3__con_1__person_1": MappingSpec(person_to_speaker={**_p([1], 3), **_p([2], 2)}),
+    "day_3__con_1__person_2": MappingSpec(person_to_speaker={**_p([3], 1), **_p([4], 3)}, delete_persons=("person_1", "person_2")),
+    "day_3__con_1__person_3": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2], 2)}),
+
+    # day_3__con_2
+    "day_3__con_2__person_1": MappingSpec(person_to_speaker={**_p([1, 2], 3), **_p([3], 2)}),
+    "day_3__con_2__person_2": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2], 3)}),
+    "day_3__con_2__person_3": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2, 3], 2)}),
+
+    # day_3__con_3
+    "day_3__con_3__person_1": MappingSpec(person_to_speaker={**_p([1], 3), **_p([2], 2)}, delete_persons=("person_3",)),
+    "day_3__con_3__person_2": MappingSpec(person_to_speaker={**_p([1], 3), **_p([2], 1)}),
+    "day_3__con_3__person_3": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2], 2)}),
+
+    # day_3__con_4
+    "day_3__con_4__person_1": MappingSpec(person_to_speaker={**_p([1], 3), **_p([2], 2)}),
+    "day_3__con_4__person_2": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2], 3)}),
+    "day_3__con_4__person_3": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2], 2)}),
+
+    # day_3__con_5
+    "day_3__con_5__person_1": MappingSpec(person_to_speaker={**_p([1], 3), **_p([2], 2)}),
+    "day_3__con_5__person_2": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2], 3)}),
+    "day_3__con_5__person_3": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2], 2)}),
+
+    # day_3__con_6
+    "day_3__con_6__person_1": MappingSpec(person_to_speaker={**_p([1], 2), **_p([2], 3)}),
+    "day_3__con_6__person_2": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2], 3)}),
+    "day_3__con_6__person_3": MappingSpec(person_to_speaker={**_p([1], 1), **_p([3], 2)}, delete_persons=("person_2",)),
+
+    # day_4__con_1
+    "day_4__con_1__person_1": MappingSpec(person_to_speaker={**_p([1], 2), **_p([2], 3)}),
+    "day_4__con_1__person_2": MappingSpec(person_to_speaker={**_p([2], 1), **_p([3], 3)}, delete_persons=("person_1",)),
+    "day_4__con_1__person_3": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2], 2)}),
+
+    # day_4__con_2
+    "day_4__con_2__person_1": MappingSpec(person_to_speaker={**_p([1], 2), **_p([2], 3)}),
+    "day_4__con_2__person_2": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2], 3)}),
+
+    # day_4__con_3
+    "day_4__con_3__person_1": MappingSpec(person_to_speaker={**_p([1], 3), **_p([2], 2)}),
+    "day_4__con_3__person_2": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2], 3)}),
+    "day_4__con_3__person_3": MappingSpec(person_to_speaker={**_p([1], 2), **_p([2], 1)}),
+
+    # day_4__con_4
+    "day_4__con_4__person_1": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2], 2), **_p([3], 3)}),
+    "day_4__con_4__person_2": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2], 3)}, delete_persons=("person_3",)),
+    "day_4__con_4__person_3": MappingSpec(person_to_speaker={**_p([1], 2), **_p([2, 3], 1)}),
+
+    # day_4__con_5
+    "day_4__con_5__person_1": MappingSpec(person_to_speaker={**_p([1], 3), **_p([2], 2)}),
+    "day_4__con_5__person_2": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2], 3)}),
+    "day_4__con_5__person_3": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2, 3], 2)}),
+
+    # day_4__con_6
+    "day_4__con_6__person_1": MappingSpec(person_to_speaker={**_p([1], 3), **_p([3], 2)}, delete_persons=("person_2",)),
+    "day_4__con_6__person_2": MappingSpec(person_to_speaker={**_p([1], 3), **_p([2], 1)}),
+    "day_4__con_6__person_3": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2, 3], 2)}),
+
+    # day_5__con_1
+    "day_5__con_1__person_1": MappingSpec(person_to_speaker={**_p([1], 3), **_p([2], 2)}),
+    "day_5__con_1__person_2": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2], 3)}),
+
+    # day_5__con_2
+    "day_5__con_2__person_1": MappingSpec(person_to_speaker={**_p([1], 3), **_p([2], 1)}),
+    "day_5__con_2__person_2": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2], 3)}),
+
+    # day_5__con_3
+    "day_5__con_3__person_1": MappingSpec(person_to_speaker={**_p([1], 3), **_p([2], 2)}),
+    "day_5__con_3__person_2": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2], 3)}),
+    "day_5__con_3__person_3": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2], 2)}),
+
+    # day_5__con_4
+    "day_5__con_4__person_1": MappingSpec(person_to_speaker={**_p([1], 2), **_p([2], 3)}),
+    "day_5__con_4__person_2": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2], 3)}),
+    "day_5__con_4__person_3": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2], 2)}),
+
+    # day_5__con_5
+    "day_5__con_5__person_1": MappingSpec(person_to_speaker={**_p([1], 2), **_p([2], 3)}),
+    "day_5__con_5__person_2": MappingSpec(person_to_speaker={**_p([1], 1), **_p([3], 3)}, delete_persons=("person_2", "person_4")),
+    "day_5__con_5__person_3": MappingSpec(person_to_speaker={**_p([1], 2), **_p([2, 3], 1)}),
+
+    # day_5__con_6
+    "day_5__con_6__person_1": MappingSpec(person_to_speaker={**_p([1], 3), **_p([2], 2)}),
+    "day_5__con_6__person_2": MappingSpec(person_to_speaker={**_p([1], 3), **_p([2], 1)}),
+    "day_5__con_6__person_3": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2], 2)}),
+
+    # day_5__con_7
+    "day_5__con_7__person_1": MappingSpec(person_to_speaker={**_p([1], 3), **_p([2], 2)}),
+    "day_5__con_7__person_2": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2], 3)}),
+    "day_5__con_7__person_3": MappingSpec(person_to_speaker={**_p([1], 2), **_p([2, 3], 1)}),
+
+    # day_5__con_8
+    "day_5__con_8__person_1": MappingSpec(person_to_speaker={**_p([1], 2), **_p([2], 3)}),
+    "day_5__con_8__person_2": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2], 3)}),
+    "day_5__con_8__person_3": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2], 2)}),
+
+    # day_6__con_1
+    "day_6__con_1__person_1": MappingSpec(person_to_speaker={**_p([1, 2], 2), **_p([3], 3)}),
+    "day_6__con_1__person_2": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2], 3)}),
+    "day_6__con_1__person_3": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2], 2)}),
+
+    # day_6__con_2
+    "day_6__con_2__person_1": MappingSpec(person_to_speaker={**_p([1], 2), **_p([2], 3)}),
+    "day_6__con_2__person_2": MappingSpec(person_to_speaker={**_p([1], 1), **_p([3], 3)}, delete_persons=("person_2",)),
+    "day_6__con_2__person_3": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2], 2)}),
+
+    # day_6__con_3
+    "day_6__con_3__person_1": MappingSpec(person_to_speaker={**_p([1], 3), **_p([2], 2)}),
+    "day_6__con_3__person_2": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2], 3)}, delete_persons=("person_3",)),
+    "day_6__con_3__person_3": MappingSpec(person_to_speaker={**_p([1], 3), **_p([3], 1)}, delete_persons=("person_2", "person_4")),
+
+    # day_6__con_4
+    "day_6__con_4__person_1": MappingSpec(person_to_speaker={**_p([1], 2), **_p([2], 3)}),
+    "day_6__con_4__person_2": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2], 3)}),
+    "day_6__con_4__person_3": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2], 2)}),
+
+    # day_6__con_5
+    "day_6__con_5__person_1": MappingSpec(person_to_speaker={**_p([1], 2), **_p([2], 3)}),
+    "day_6__con_5__person_2": MappingSpec(person_to_speaker={**_p([1], 3), **_p([2], 1)}),
+    "day_6__con_5__person_3": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2], 2)}),
+
+    # day_6__con_6
+    "day_6__con_6__person_1": MappingSpec(person_to_speaker={**_p([1], 3), **_p([2], 2)}),
+    "day_6__con_6__person_2": MappingSpec(person_to_speaker={**_p([1], 3), **_p([2], 1)}),
+    "day_6__con_6__person_3": MappingSpec(person_to_speaker={**_p([1], 1), **_p([2], 2)}),
 }
 
 
