@@ -231,6 +231,35 @@ def _standardize_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _parse_int_like(value):
+    if value is None or (isinstance(value, float) and (pd.isna(value))):
+        return None
+    if isinstance(value, (int,)):
+        return int(value)
+    if isinstance(value, float):
+        try:
+            return int(value)
+        except Exception:
+            return None
+    if isinstance(value, str):
+        m = re.search(r'-?\d+', value)
+        if m:
+            try:
+                return int(m.group(0))
+            except Exception:
+                return None
+        return None
+    return None
+
+
+def _normalize_id_columns(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    for col in ['person_id', 'speaker_id']:
+        if col in df.columns:
+            df[f'{col}_num'] = df[col].apply(_parse_int_like)
+    return df
+
+
 def _group_face_detections_by_frame(head_tracking_df: pd.DataFrame):
     """Return dict: frame_number -> list of face detection dicts."""
     faces_by_frame = {}
@@ -249,10 +278,13 @@ def _group_face_detections_by_frame(head_tracking_df: pd.DataFrame):
                 'y2': float(row['y2']),
             }
             if 'person_id' in row:
-                # pandas Series supports 'in' on index; guard with get
-                det['person_id'] = int(row.get('person_id')) if pd.notna(row.get('person_id')) else None
+                det['person_id'] = _parse_int_like(row.get('person_id'))
+            if 'person_id_num' in row:
+                det['person_id'] = _parse_int_like(row.get('person_id_num'))
             if 'speaker_id' in row:
-                det['speaker_id'] = int(row.get('speaker_id')) if pd.notna(row.get('speaker_id')) else None
+                det['speaker_id'] = _parse_int_like(row.get('speaker_id'))
+            if 'speaker_id_num' in row:
+                det['speaker_id'] = _parse_int_like(row.get('speaker_id_num'))
             detections.append(det)
         faces_by_frame[int(frame_number)] = detections
     return faces_by_frame
@@ -283,7 +315,9 @@ def _group_body_detections_by_frame(body_df: pd.DataFrame):
                 except Exception:
                     det['confidence'] = None
             if 'speaker_id' in row:
-                det['speaker_id'] = int(row['speaker_id']) if pd.notna(row['speaker_id']) else None
+                det['speaker_id'] = _parse_int_like(row.get('speaker_id'))
+            if 'speaker_id_num' in row:
+                det['speaker_id'] = _parse_int_like(row.get('speaker_id_num'))
             detections.append(det)
         bodies_by_frame[int(frame_number)] = detections
     return bodies_by_frame
@@ -296,8 +330,8 @@ def _find_speaker_bbox_in_frame(head_tracking_df: pd.DataFrame, frame_index: int
     if head_tracking_df is None or head_tracking_df.empty or speaker_id is None:
         return None
 
-    # Try by person_id in MultiIndex if available
-    if isinstance(head_tracking_df.index, pd.MultiIndex) and set(head_tracking_df.index.names) >= {'frame_number', 'person_id'}:
+    # Try by person_id_num in MultiIndex if available
+    if isinstance(head_tracking_df.index, pd.MultiIndex) and set(head_tracking_df.index.names) >= {'frame_number', 'person_id_num'}:
         try:
             row = head_tracking_df.loc[(frame_index, speaker_id)]
             return row[['x1', 'y1', 'x2', 'y2']].to_dict()
@@ -306,15 +340,15 @@ def _find_speaker_bbox_in_frame(head_tracking_df: pd.DataFrame, frame_index: int
 
     # Try by direct filtering on columns 'frame_number' + 'speaker_id'
     candidate_cols = set(head_tracking_df.columns)
-    if {'frame_number', 'speaker_id'} <= candidate_cols:
-        match = head_tracking_df[(head_tracking_df['frame_number'] == frame_index) & (head_tracking_df['speaker_id'] == speaker_id)]
+    if {'frame_number', 'speaker_id_num'} <= candidate_cols:
+        match = head_tracking_df[(head_tracking_df['frame_number'] == frame_index) & (head_tracking_df['speaker_id_num'] == speaker_id)]
         if not match.empty:
             row = match.iloc[0]
             return {k: float(row[k]) for k in ['x1', 'y1', 'x2', 'y2']}
 
-    # Try by 'person_id' column (non-index)
-    if {'frame_number', 'person_id'} <= candidate_cols:
-        match = head_tracking_df[(head_tracking_df['frame_number'] == frame_index) & (head_tracking_df['person_id'] == speaker_id)]
+    # Try by 'person_id_num' column (non-index)
+    if {'frame_number', 'person_id_num'} <= candidate_cols:
+        match = head_tracking_df[(head_tracking_df['frame_number'] == frame_index) & (head_tracking_df['person_id_num'] == speaker_id)]
         if not match.empty:
             row = match.iloc[0]
             return {k: float(row[k]) for k in ['x1', 'y1', 'x2', 'y2']}
@@ -336,7 +370,9 @@ def _predict_speaker_position(head_tracking_df: pd.DataFrame, angular_frames_by_
     if id_col is None or 'frame_number' not in df.columns:
         return None
 
-    speaker_df = df[df[id_col] == speaker_id]
+    # If numeric variant exists, use it
+    id_num_col = f'{id_col}_num' if f'{id_col}_num' in df.columns else id_col
+    speaker_df = df[df[id_num_col] == speaker_id]
     past_frames = speaker_df[speaker_df['frame_number'] < current_frame_index]
     if past_frames.empty:
         return None
@@ -433,8 +469,13 @@ def process_video(video_path=None, base_video=None, face_csv=None, body_csv=None
         if body_df is not None and 'frame_number' in body_df.columns:
             body_df = body_df[(body_df['frame_number'] >= start_f) & (body_df['frame_number'] <= end_f)]
 
-    if set(['frame_number', 'person_id']).issubset(head_tracking_df.columns):
-        head_tracking_multiindex = head_tracking_df.set_index(['frame_number', 'person_id'])
+    # Normalize id columns to numeric forms
+    head_tracking_df = _normalize_id_columns(head_tracking_df)
+    if body_df is not None:
+        body_df = _normalize_id_columns(body_df)
+
+    if set(['frame_number', 'person_id_num']).issubset(head_tracking_df.columns):
+        head_tracking_multiindex = head_tracking_df.set_index(['frame_number', 'person_id_num'])
     else:
         head_tracking_multiindex = head_tracking_df  # fallback without MultiIndex
 
