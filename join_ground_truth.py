@@ -477,10 +477,18 @@ if __name__ == "__main__":
         description="Join transcripts, face detections, body detections, and angular analysis into a single JSON per video.",
         formatter_class=argparse.RawTextHelpFormatter
     )
+    # Mode 1: Legacy single argument (derive all other paths)
     parser.add_argument(
-        "video_path", type=str,
-        help="Full path to the input video file. \nExample: '/mas/robots/prg-egocom/EGOCOM/720p/20min/parts/vid_117__...MP4'"
+        "video_path", nargs='?', type=str,
+        help="Full path to the input video file for deriving other paths. Optional if explicit paths are provided."
     )
+    # Mode 2: Explicit paths
+    parser.add_argument("--base_video", type=str, help="Base video name or path used to parse frame range and name.")
+    parser.add_argument("--face_csv", type=str, help="Path to face detection CSV (global gallery with speaker).")
+    parser.add_argument("--body_csv", type=str, default=None, help="Optional path to body detection CSV.")
+    parser.add_argument("--co_tracker_json", type=str, help="Path to co-tracker ground-truth JSON.")
+    parser.add_argument("--transcript_csv", type=str, help="Path to transcript CSV (with frames or startTime).")
+    parser.add_argument("--output_json", type=str, default=None, help="Optional output path for joined JSON.")
     
     try:
         import pandas as pd
@@ -494,4 +502,12 @@ if __name__ == "__main__":
         sys.exit(1)
 
     args = parser.parse_args()
-    process_video(args.video_path)
+    process_video(
+        video_path=args.video_path,
+        base_video=args.base_video,
+        face_csv=args.face_csv,
+        body_csv=args.body_csv,
+        co_tracker_json=args.co_tracker_json,
+        transcript_csv=args.transcript_csv,
+        output_json=args.output_json,
+    )
