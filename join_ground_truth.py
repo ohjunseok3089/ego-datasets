@@ -361,7 +361,7 @@ def _predict_speaker_position(*args, **kwargs):
     return None
 
 
-def process_video(video_path=None, base_video=None, face_csv=None, body_csv=None, co_tracker_json=None, transcript_csv=None, output_json=None, fps: float = FPS):
+def process_video(video_path=None, base_video=None, face_csv=None, body_csv=None, co_tracker_json=None, transcript_csv=None, output_json=None, fps: float = FPS, debug: bool = False):
     """
     Main function to orchestrate the data loading, processing, and saving.
     """
@@ -424,7 +424,8 @@ def process_video(video_path=None, base_video=None, face_csv=None, body_csv=None
             print(f"Warning: Body detection CSV not found at {paths_info['body_detection_csv_path']}. Continuing without it.")
 
     print("Preprocessing data for efficient lookup...")
-    speaker_events_by_frame = preprocess_transcriptions(transcriptions_df, paths_info.get('conversation_id_substr', ''), paths_info.get('frame_range'), fps=fps_read)
+    frame_range = paths_info.get('frame_range')
+    speaker_events_by_frame = preprocess_transcriptions(transcriptions_df, paths_info.get('conversation_id_substr', ''), frame_range, fps=fps_read)
     # Prepare indices and per-frame groupings for efficient lookup
     # Apply frame range filtering to detections if present
     if paths_info.get('frame_range') is not None:
@@ -448,14 +449,29 @@ def process_video(video_path=None, base_video=None, face_csv=None, body_csv=None
     bodies_by_frame = _group_body_detections_by_frame(body_df) if body_df is not None else {}
     angular_frames_by_index = {frame['frame_index']: frame for frame in angular_data['frames']}
 
+    if debug:
+        print(
+            "\n[DEBUG] Dataset summaries:\n"
+            f"  - Transcript events frames: {len(speaker_events_by_frame)} entries (min={min(speaker_events_by_frame.keys()) if speaker_events_by_frame else None}, max={max(speaker_events_by_frame.keys()) if speaker_events_by_frame else None})\n"
+            f"  - Face detections frames: {len(faces_by_frame)} entries (min={min(faces_by_frame.keys()) if faces_by_frame else None}, max={max(faces_by_frame.keys()) if faces_by_frame else None})\n"
+            f"  - Body detections frames: {len(bodies_by_frame)} entries (min={min(bodies_by_frame.keys()) if bodies_by_frame else None}, max={max(bodies_by_frame.keys()) if bodies_by_frame else None})"
+        )
+
     print("Augmenting frame data...")
     total_frames = len(angular_data['frames'])
     joined_frames = []
+    missing_debug_reported = 0
     for i, frame_obj in enumerate(angular_data['frames']):
         if (i + 1) % 100 == 0 or i == total_frames - 1:
             print(f"  Processing frame {i+1}/{total_frames}...")
             
         current_frame_index = frame_obj['frame_index']
+        # Map local frame index to global frame number if a slice is used
+        if frame_range is not None:
+            start_f, _end_f = frame_range
+            global_frame_index = int(start_f) + int(current_frame_index)
+        else:
+            global_frame_index = int(current_frame_index)
         # Base per-frame output (clone of relevant angular fields)
         out_frame = {
             'frame_index': frame_obj.get('frame_index'),
@@ -470,18 +486,38 @@ def process_video(video_path=None, base_video=None, face_csv=None, body_csv=None
         out_frame['speaker_id'] = None
         out_frame['speaker_location'] = {}
 
-        if current_frame_index in speaker_events_by_frame:
-            speaker_events = speaker_events_by_frame[current_frame_index]
+        if global_frame_index in speaker_events_by_frame:
+            speaker_events = speaker_events_by_frame[global_frame_index]
             if speaker_events:
                 speaker_id = speaker_events[0]['id']
                 out_frame['speaker_id'] = speaker_id
-                loc = _find_speaker_bbox_in_frame(head_tracking_multiindex if isinstance(head_tracking_multiindex, pd.DataFrame) else head_tracking_df, current_frame_index, speaker_id)
-                if loc:
-                    out_frame['speaker_location'] = loc
+                # Try to find speaker bbox by scanning face detections for this global frame
+                face_list = faces_by_frame.get(global_frame_index, [])
+                for det in face_list:
+                    det_speaker = det.get('speaker_id') if det.get('speaker_id') is not None else det.get('speaker_id_num')
+                    if det_speaker == speaker_id:
+                        out_frame['speaker_location'] = {k: det[k] for k in ['x1', 'y1', 'x2', 'y2'] if k in det}
+                        break
+                # Fallback: index-based lookup if not found in face list
+                if not out_frame['speaker_location']:
+                    loc = _find_speaker_bbox_in_frame(
+                        head_tracking_multiindex if isinstance(head_tracking_multiindex, pd.DataFrame) else head_tracking_df,
+                        global_frame_index,
+                        speaker_id,
+                    )
+                    if loc:
+                        out_frame['speaker_location'] = loc
 
-        # Attach detections for the frame
-        out_frame['face_detection'] = faces_by_frame.get(current_frame_index, [])
-        out_frame['body_detection'] = bodies_by_frame.get(current_frame_index, [])
+        # Attach detections for the frame (global index)
+        out_frame['face_detection'] = faces_by_frame.get(global_frame_index, [])
+        out_frame['body_detection'] = bodies_by_frame.get(global_frame_index, [])
+
+        if debug and (out_frame['speaker_id'] is None or not out_frame['face_detection']):
+            if missing_debug_reported < 20:
+                print(f"[DEBUG] Frame local={current_frame_index} global={global_frame_index} | speaker_in_transcript={global_frame_index in speaker_events_by_frame} | faces={len(out_frame['face_detection'])} | bodies={len(out_frame['body_detection'])}")
+                if global_frame_index in speaker_events_by_frame:
+                    print(f"        speaker_events={speaker_events_by_frame[global_frame_index]}")
+                missing_debug_reported += 1
 
         joined_frames.append(out_frame)
 
@@ -535,6 +571,7 @@ if __name__ == "__main__":
     parser.add_argument("--transcript_csv", type=str, help="Path to transcript CSV (with frames or startTime).")
     parser.add_argument("--output_json", type=str, default=None, help="Optional output path for joined JSON.")
     parser.add_argument("--fps", type=float, default=30.0, help="Frames per second for timestamp/frame computations (default 30).")
+    parser.add_argument("--debug", action='store_true', help="Enable debug logging for missing speaker/face detections.")
     
     try:
         import pandas as pd
@@ -557,4 +594,5 @@ if __name__ == "__main__":
         transcript_csv=args.transcript_csv,
         output_json=args.output_json,
         fps=float(args.fps),
+        debug=bool(args.debug),
     )
