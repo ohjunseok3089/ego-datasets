@@ -334,7 +334,9 @@ def _find_speaker_bbox_in_frame(head_tracking_df: pd.DataFrame, frame_index: int
     if isinstance(head_tracking_df.index, pd.MultiIndex) and set(head_tracking_df.index.names) >= {'frame_number', 'person_id_num'}:
         try:
             row = head_tracking_df.loc[(frame_index, speaker_id)]
-            return row[['x1', 'y1', 'x2', 'y2']].to_dict()
+            if isinstance(row, pd.DataFrame):
+                row = row.iloc[0]
+            return {k: float(row[k]) for k in ['x1', 'y1', 'x2', 'y2'] if k in row}
         except KeyError:
             pass
 
@@ -344,14 +346,14 @@ def _find_speaker_bbox_in_frame(head_tracking_df: pd.DataFrame, frame_index: int
         match = head_tracking_df[(head_tracking_df['frame_number'] == frame_index) & (head_tracking_df['speaker_id_num'] == speaker_id)]
         if not match.empty:
             row = match.iloc[0]
-            return {k: float(row[k]) for k in ['x1', 'y1', 'x2', 'y2']}
+            return {k: float(row[k]) for k in ['x1', 'y1', 'x2', 'y2'] if k in match.columns}
 
     # Try by 'person_id_num' column (non-index)
     if {'frame_number', 'person_id_num'} <= candidate_cols:
         match = head_tracking_df[(head_tracking_df['frame_number'] == frame_index) & (head_tracking_df['person_id_num'] == speaker_id)]
         if not match.empty:
             row = match.iloc[0]
-            return {k: float(row[k]) for k in ['x1', 'y1', 'x2', 'y2']}
+            return {k: float(row[k]) for k in ['x1', 'y1', 'x2', 'y2'] if k in match.columns}
 
     return None
 
@@ -496,7 +498,15 @@ def process_video(video_path=None, base_video=None, face_csv=None, body_csv=None
                 for det in face_list:
                     det_speaker = det.get('speaker_id') if det.get('speaker_id') is not None else det.get('speaker_id_num')
                     if det_speaker == speaker_id:
-                        out_frame['speaker_location'] = {k: det[k] for k in ['x1', 'y1', 'x2', 'y2'] if k in det}
+                        try:
+                            out_frame['speaker_location'] = {
+                                'x1': float(det['x1']),
+                                'y1': float(det['y1']),
+                                'x2': float(det['x2']),
+                                'y2': float(det['y2']),
+                            }
+                        except Exception:
+                            out_frame['speaker_location'] = {}
                         break
                 # Fallback: index-based lookup if not found in face list
                 if not out_frame['speaker_location']:
