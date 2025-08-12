@@ -334,7 +334,7 @@ def analyze_video_clip(
         source_frame_index = global_frame_offset + (frame_idx_in_video - start_processing_frame)
         frame_info = {
             "frame_index": source_frame_index,
-            "timestamp": source_frame_index * fps,
+            "timestamp": source_frame_index / fps,
             "social_category": social_category,
             "red_circle": {
                 "detected": curr_red_pos is not None,
