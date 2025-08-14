@@ -213,7 +213,7 @@ def apply_global_mapping(detection_results, face_df):
         # More lenient conflict resolution - allow multiple tracks per person
         if best_person:
             final_mapping[body_track_id] = best_person
-            print(f"Global mapping: {body_track_id} -> person_{best_person} ({best_match_count} matches across {best_frame_count} frames)")
+            print(f"Global mapping: {body_track_id} -> {best_person} ({best_match_count} matches across {best_frame_count} frames)")
     
     # Update ALL detection results with global mapping
     updated_results = []
