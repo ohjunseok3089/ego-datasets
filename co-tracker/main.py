@@ -342,7 +342,7 @@ if __name__ == "__main__":
             )[None]
             print("Saving video with predicted tracks...")
             vis = Visualizer(save_dir=save_dir, pad_value=120, linewidth=3)
-            output_filename = f"{seq_name}_{actual_start_frame}_{actual_start_frame + FRAMES_INTERVAL - 1}"
+            output_filename = f"{seq_name}_{actual_start_frame}_{end_frame - 2}"
             vis.visualize(
                 video_tensor, pred_tracks, pred_visibility, query_frame=args.grid_query_frame, filename=output_filename
             )
@@ -382,7 +382,7 @@ if __name__ == "__main__":
                 writer.release()
                 print(f"Saved video {output_filename}.mp4")
         
-        chunk_start = actual_start_frame + FRAMES_INTERVAL - 1
+        chunk_start = end_frame - 1
         print(f"Completed chunk, moving to next chunk starting at frame {chunk_start}")
     
     print(f"Processed all frames from 0 to {num_frames}")
