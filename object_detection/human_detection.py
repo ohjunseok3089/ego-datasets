@@ -27,6 +27,27 @@ def calculate_iou(box1, box2):
     
     return intersection / union if union > 0 else 0.08
 
+def calculate_face_coverage_in_body(face_box, body_box):
+    """Return fraction of the face area that lies inside the body box (0..1)."""
+    fx1, fy1, fx2, fy2 = face_box
+    bx1, by1, bx2, by2 = body_box
+
+    # Intersection rectangle
+    ix1 = max(fx1, bx1)
+    iy1 = max(fy1, by1)
+    ix2 = min(fx2, bx2)
+    iy2 = min(fy2, by2)
+
+    if ix2 <= ix1 or iy2 <= iy1:
+        return 0.0
+
+    intersection = (ix2 - ix1) * (iy2 - iy1)
+    face_area = max(0, (fx2 - fx1)) * max(0, (fy2 - fy1))
+    if face_area <= 0:
+        return 0.0
+
+    return intersection / face_area
+
 def map_to_ground_truth(detection_results, face_recognition_csv_path):
     """Map human detection results to ground truth face recognition data"""
     try:
@@ -58,11 +79,12 @@ def map_to_ground_truth(detection_results, face_recognition_csv_path):
         
         for _, face_row in nearby_faces.iterrows():
             face_box = [face_row['x1'], face_row['y1'], face_row['x2'], face_row['y2']]
-            iou = calculate_iou(body_box, face_box)
+            coverage = calculate_face_coverage_in_body(face_box, body_box)
             
-            if iou > 0.1:  # Minimum overlap threshold
+            # Require at least 60% of the face bbox to lie inside the body bbox
+            if coverage >= 0.6:
                 face_person_id = face_row['person_id']
-                person_mapping[body_track_id].append((face_person_id, iou, 1))
+                person_mapping[body_track_id].append((face_person_id, coverage, 1))
     
     # Determine best mapping for each body track based on majority overlap
     final_mapping = {}
@@ -70,24 +92,24 @@ def map_to_ground_truth(detection_results, face_recognition_csv_path):
         if not matches:
             continue
             
-        # Group by face_person_id and sum IoU scores
-        person_scores = defaultdict(lambda: {'total_iou': 0, 'count': 0})
-        for face_person_id, iou, count in matches:
-            person_scores[face_person_id]['total_iou'] += iou
+        # Group by face_person_id and sum coverage scores
+        person_scores = defaultdict(lambda: {'total_coverage': 0, 'count': 0})
+        for face_person_id, coverage, count in matches:
+            person_scores[face_person_id]['total_coverage'] += coverage
             person_scores[face_person_id]['count'] += count
         
-        # Find person with highest average IoU and sufficient overlap
+        # Find person with highest average face-in-body coverage and sufficient evidence
         best_person = None
         best_score = 0
         for person_id, data in person_scores.items():
-            avg_iou = data['total_iou'] / data['count']
-            if data['count'] >= 3 and avg_iou > best_score:  # Require at least 3 overlapping frames
+            avg_coverage = data['total_coverage'] / data['count']
+            if data['count'] >= 3 and avg_coverage > best_score:  # Require at least 3 overlapping frames
                 best_person = person_id
-                best_score = avg_iou
+                best_score = avg_coverage
         
         if best_person:
             final_mapping[body_track_id] = best_person
-            print(f"Mapped {body_track_id} -> person_{best_person} (avg IoU: {best_score:.3f})")
+            print(f"Mapped {body_track_id} -> {best_person} (avg face-in-body coverage: {best_score:.3f})")
     
     # Update detection results with mapped person IDs
     updated_results = []
@@ -103,7 +125,9 @@ def map_to_ground_truth(detection_results, face_recognition_csv_path):
     return updated_results
 
 def is_face_inside_body(face_box, body_box):
-    """Check if face is properly positioned within body box (face should be in upper portion)"""
+    """Check if face is properly positioned within body box (face should be in upper portion)
+    and at least 60% of the face area lies inside the body bbox.
+    """
     face_x1, face_y1, face_x2, face_y2 = face_box
     body_x1, body_y1, body_x2, body_y2 = body_box
     
@@ -124,9 +148,9 @@ def is_face_inside_body(face_box, body_box):
     if not (body_y1 <= face_center_y <= upper_body_limit):
         return False
     
-    # Additional check: face should have reasonable overlap with body (more lenient)
-    iou = calculate_iou(face_box, body_box)
-    if iou < 0.005:  # More lenient overlap requirement
+    # Coverage check: at least 60% of the face bbox lies inside the body bbox
+    coverage = calculate_face_coverage_in_body(face_box, body_box)
+    if coverage < 0.6:
         return False
     
     return True
