@@ -285,7 +285,8 @@ if __name__ == "__main__":
         # Skip if no frames to process
         if end_frame <= actual_start_frame or len(video) == 0:
             print(f"No frames to process in segment {actual_start_frame} to {end_frame}, skipping...")
-            break
+            chunk_start += FRAMES_INTERVAL
+            continue
         
         if hasattr(model, 'reset'):
             model.reset()
@@ -341,7 +342,7 @@ if __name__ == "__main__":
             )[None]
             print("Saving video with predicted tracks...")
             vis = Visualizer(save_dir=save_dir, pad_value=120, linewidth=3)
-            output_filename = f"{seq_name}_{actual_start_frame}_{end_frame - 2}"
+            output_filename = f"{seq_name}_{actual_start_frame}_{actual_start_frame + FRAMES_INTERVAL - 1}"
             vis.visualize(
                 video_tensor, pred_tracks, pred_visibility, query_frame=args.grid_query_frame, filename=output_filename
             )
@@ -381,8 +382,7 @@ if __name__ == "__main__":
                 writer.release()
                 print(f"Saved video {output_filename}.mp4")
         
-        # Progress to next chunk with slight overlap
-        chunk_start = actual_end - 1 if actual_end > chunk_start + 1 else actual_end
+        chunk_start = actual_start_frame + FRAMES_INTERVAL - 1
         print(f"Completed chunk, moving to next chunk starting at frame {chunk_start}")
     
     print(f"Processed all frames from 0 to {num_frames}")
