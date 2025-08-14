@@ -29,8 +29,9 @@ fi
 VIDEO_BASENAME=$(basename "$VIDEO_PATH")
 VIDEO_NAME="${VIDEO_BASENAME%.*}"
 
-# Create session name
-SESSION_NAME="cotracker_${VIDEO_NAME}_gpu${GPU_ID}"
+# Create shorter session name by truncating long names and removing UUIDs
+SHORT_NAME=$(echo "$VIDEO_NAME" | sed 's/[0-9a-f]\{8\}-[0-9a-f]\{4\}-[0-9a-f]\{4\}-[0-9a-f]\{4\}-[0-9a-f]\{12\}//g' | sed 's/[()\-]/_/g' | cut -c1-40)
+SESSION_NAME="ct_${SHORT_NAME}_g${GPU_ID}"
 
 # Create output directory
 OUTPUT_DIR="/mas/robots/prg-ego4d/co-tracker"
@@ -44,7 +45,7 @@ echo "Screen session: $SESSION_NAME"
 echo "================================"
 
 # Create temporary script for screen session
-TEMP_SCRIPT="cotracker_single_${VIDEO_NAME}_gpu${GPU_ID}_run.sh"
+TEMP_SCRIPT="ct_single_${SHORT_NAME}_g${GPU_ID}_run.sh"
 
 cat > "$TEMP_SCRIPT" << EOF
 #!/bin/bash
@@ -80,15 +81,16 @@ EOF
 chmod +x "$TEMP_SCRIPT"
 
 # Launch screen session
-screen -dmS "$SESSION_NAME" bash -c "./$TEMP_SCRIPT &> ${SESSION_NAME}.log"
+LOG_FILE="${SESSION_NAME}.log"
+screen -dmS "$SESSION_NAME" bash -c "./$TEMP_SCRIPT &> $LOG_FILE"
 
 echo "Screen session '$SESSION_NAME' launched successfully!"
-echo "Log file: ${SESSION_NAME}.log"
+echo "Log file: $LOG_FILE"
 echo ""
 echo "To monitor progress:"
 echo "  screen -r $SESSION_NAME"
 echo "To view log:"
-echo "  tail -f ${SESSION_NAME}.log"
+echo "  tail -f $LOG_FILE"
 echo "To list all sessions:"
 echo "  screen -ls"
 
