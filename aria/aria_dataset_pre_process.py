@@ -27,6 +27,8 @@ try:
     for seq_name, seq_data in data.get('sequences', {}).items():
         if seq_name in sequences_to_keep:
             processed_data['sequences'][seq_name] = seq_data
+    if 'sequence_config' in data:
+        processed_data['sequence_config'] = data['sequence_config']
 
     with open('/mas/robots/prg-aria/raw/AriaEverydayActivities_download_urls_processed.json', 'w', encoding='utf-8') as f:
         json.dump(processed_data, f, indent=4)
