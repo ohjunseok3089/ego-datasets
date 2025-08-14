@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Set the base directory path
-BASE_DIR="/mas/robots/prg-ego4d/parts/"
+BASE_DIR="/mas/robots/prg-egocom/EGOCOM/720p/20min/parts/"
 
 # Batch configuration: Parse batch number (1 or 2)
 BATCH_NUM=${BATCH_NUM:-1}
@@ -18,7 +18,7 @@ if [ ! -d "$BASE_DIR" ]; then
 fi
 
 # Create output directory if it doesn't exist
-mkdir -p /mas/robots/prg-ego4d/co-tracker/
+mkdir -p /mas/robots/prg-egocom/EGOCOM/720p/20min/co-tracker/
 
 echo "Starting batch processing of videos in parallel (4 GPUs per batch)..."
 echo "Base directory: $BASE_DIR"
@@ -94,7 +94,7 @@ process_group() {
             --video_path "$video_file" \
             --grid_size 30 \
             --grid_query_frame 0 \
-            --save_dir "/mas/robots/prg-ego4d/co-tracker"
+            --save_dir "/mas/robots/prg-egocom/EGOCOM/720p/5min_parts/co-tracker"
         if [ $? -eq 0 ]; then
             echo "[GPU $gpu_id] SUCCESS: Successfully processed $video_basename"
             ((count++))
