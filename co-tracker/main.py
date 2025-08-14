@@ -382,7 +382,8 @@ if __name__ == "__main__":
                 writer.release()
                 print(f"Saved video {output_filename}.mp4")
         
-        chunk_start = end_frame - 1
+        # Always progress to the next segment with 1-frame overlap (기존 코드 로직)
+        chunk_start = max(min(end_frame - 2, num_frames), actual_start_frame + 1)
         print(f"Completed chunk, moving to next chunk starting at frame {chunk_start}")
     
     print(f"Processed all frames from 0 to {num_frames}")
