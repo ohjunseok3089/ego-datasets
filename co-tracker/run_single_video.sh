@@ -56,13 +56,12 @@ echo "GPU: $GPU_ID"
 echo "Output: $OUTPUT_DIR"
 echo "================================"
 
-# Run CoTracker with chunk processing to manage memory
+# Run CoTracker
 CUDA_VISIBLE_DEVICES=$GPU_ID PYTHONPATH=.. python main.py \\
     --video_path "$VIDEO_PATH" \\
     --grid_size 30 \\
     --grid_query_frame 0 \\
-    --save_dir "$OUTPUT_DIR" \\
-    --chunk_size 1200
+    --save_dir "$OUTPUT_DIR"
 
 exit_code=\$?
 
