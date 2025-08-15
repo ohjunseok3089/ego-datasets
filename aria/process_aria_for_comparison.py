@@ -48,7 +48,8 @@ def generate_final_comparison(input_path: str, output_path: str, fps: int, expec
     # Compute incremental angles
     df['time_delta_s'] = df['tracking_timestamp_us'].diff() / 1_000_000.0
     # First row has NaN delta; replace with 0 so its increments contribute 0
-    df['time_delta_s'] = df['time_delta_s'].fillna(0.0)
+    mean_interval = df['time_delta_s'].dropna().mean()
+    df['time_delta_s'].iloc[0] = mean_interval
 
     df['inc_angle_x'] = df['angular_velocity_x_device'] * df['time_delta_s']
     df['inc_angle_y'] = df['angular_velocity_y_device'] * df['time_delta_s']

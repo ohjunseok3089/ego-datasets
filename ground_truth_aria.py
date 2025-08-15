@@ -2,7 +2,7 @@ import json
 import pandas as pd
 
 # Load the first JSON file: the ground truth given by ARIA
-with open('/Volumes/T7 Shield Portable/Github/ego-datasets/aria/closed_loop_trajectory_20fps.json', 'r') as f:
+with open('./aria/closed_loop_trajectory_20fps.json', 'r') as f:
     data_ground_truth = json.load(f)
 
 # Flatten the nested JSON structure into a pandas DataFrame
@@ -15,7 +15,7 @@ df_ground_truth.rename(columns={
 
 
 # Load the second JSON file: the co-tracker analysis
-with open('/Volumes/T7 Shield Portable/Github/ego-datasets/aria/recording/recording_analysis.json', 'r') as f:
+with open('./aria/recording_analysis.json', 'r') as f:
     data_recording_analysis = json.load(f)
 
 # Flatten the nested JSON structure into a pandas DataFrame
