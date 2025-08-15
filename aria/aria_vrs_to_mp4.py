@@ -20,8 +20,8 @@ seqs = [
 ]
 
 for seq in seqs:
-    vrs_path = os.path.join(seq, "recording.vrs")
-    mp4_path = f"{seq}.mp4"
+    vrs_path = os.path.join("/mas/robots/prg-aria/raw", seq, "recording.vrs")
+    mp4_path = os.path.join("/mas/robots/prg-aria/dataset", f"{seq}.mp4")
     if os.path.isfile(vrs_path):
         print(f"Converting {vrs_path} to {mp4_path} ...")
         convert_vrs_to_mp4(vrs_path, mp4_path)
