@@ -93,6 +93,3 @@ echo "To view log:"
 echo "  tail -f $LOG_FILE"
 echo "To list all sessions:"
 echo "  screen -ls"
-
-# Clean up temp script after a delay (optional)
-(sleep 5 && rm -f "$TEMP_SCRIPT") &
