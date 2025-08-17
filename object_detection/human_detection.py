@@ -403,6 +403,6 @@ if __name__ == "__main__":
     # Construct face recognition CSV path
     input_dir = os.path.dirname(input_path)
     # face_csv_path = os.path.join(input_dir, "processed_face_recognition_videos", f"{video_filename_base}_global_gallery.csv")
-    face_csv_path = os.path.join(input_dir, "processed_face_recognition_videos", f"{video_filename_base}.csv") # ego4d
+    face_csv_path = os.path.join(input_dir, "face_detection", f"{video_filename_base}.csv") # ego4d
     
     process_video_with_yolo(input_path, output_video_path, output_csv_path, face_csv_path)
