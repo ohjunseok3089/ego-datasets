@@ -430,6 +430,12 @@ def main():
     for group_id, files_with_info in grouped_videos.items():
         print(f"\nProcessing group: {group_id}")
         
+        # Check if JSON file already exists and skip if it does
+        output_json_path = output_path / f"{group_id}_analysis.json"
+        if output_json_path.exists():
+            print(f"  Skipping group {group_id}: JSON file already exists at {output_json_path}")
+            continue
+        
         files_with_info.sort(key=lambda x: x[1]['processed_start'])
         
         all_frames_data = []
