@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Set the base directory path
-BASE_DIR="/mas/robots/prg-ego4d/parts/"
+BASE_DIR="/mas/robots/prg-ego4d/raw/v2/full_scale/"
 OUTPUT_DIR="/mas/robots/prg-ego4d/body_detection/"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON_SCRIPT="$SCRIPT_DIR/human_detection.py"
