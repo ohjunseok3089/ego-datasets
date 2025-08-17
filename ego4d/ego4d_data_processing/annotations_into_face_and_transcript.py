@@ -1,8 +1,35 @@
 import json
 import csv
 import os
+import math
+import numpy as np
+import pandas as pd
 from pathlib import Path
 from collections import defaultdict
+
+def compute_frame_range(start_time_s: float, end_time_s: float = None, fps: float = 30.0):
+    """Compute an inclusive list of frame indices covering [start, end).
+    
+    If `end_time_s` is None or not finite, returns a single-frame list at the
+    start frame.
+    """
+    if not np.isfinite(start_time_s):
+        return []
+
+    start_frame: int = math.floor(start_time_s * fps)
+
+    if end_time_s is None or not np.isfinite(end_time_s):
+        return [start_frame]
+
+    # Inclusive end frame covers up to but not including end_time_s
+    end_frame_inclusive: int = max(start_frame, math.ceil(end_time_s * fps) - 1)
+
+    # Guard against pathological spans
+    if end_frame_inclusive < start_frame:
+        end_frame_inclusive = start_frame
+
+    # Generate consecutive frames [start_frame, ..., end_frame_inclusive]
+    return list(range(start_frame, end_frame_inclusive + 1))
 
 def load_json_annotations(train_path, val_path):
     """Load and combine train and validation JSON annotations"""
@@ -106,20 +133,32 @@ def process_transcriptions(video_uid, video_data, output_dir):
                     word_start = start_time + (i * time_per_word)
                     word_end = start_time + ((i + 1) * time_per_word)
                     
+                    # Compute frame range for this word
+                    frame_list = compute_frame_range(word_start, word_end, fps=30.0)
+                    
                     transcription_data.append({
                         'conversation_id': video_uid,  # Using video_uid as conversation_id
                         'endTime': round(word_end, 2),
                         'speaker_id': person_id,
                         'startTime': round(word_start, 2),
-                        'word': word
+                        'word': word,
+                        'frame': json.dumps(frame_list, separators=(",", ":"))  # Store as compact JSON array
                     })
+    
+    # Sort transcription data by frame (use the first frame in the frame list for sorting)
+    if transcription_data:
+        def get_first_frame(item):
+            frame_list = json.loads(item['frame'])
+            return frame_list[0] if frame_list else 0
+        
+        transcription_data.sort(key=get_first_frame)
     
     # Write or append to CSV
     file_exists = os.path.exists(transcript_path)
     
     if transcription_data:
         with open(transcript_path, 'a' if file_exists else 'w', newline='') as f:
-            fieldnames = ['conversation_id', 'endTime', 'speaker_id', 'startTime', 'word']
+            fieldnames = ['conversation_id', 'endTime', 'speaker_id', 'startTime', 'word', 'frame']
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             
             if not file_exists:
