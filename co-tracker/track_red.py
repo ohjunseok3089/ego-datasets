@@ -67,62 +67,78 @@ def detect_red_circle(image, target_radius: int = 3):
     
     return (center_x, center_y, radius)
 
+def estimate_aria_intrinsics_from_fov(image_width: int, image_height: int, fov_degrees: float = 110.0) -> Dict[str, float]:
+    """
+    Estimate Aria RGB camera intrinsic parameters from FOV.
+    
+    Based on typical fisheye camera parameters and Aria's 110° FOV.
+    Real Aria cameras have fx ≈ fy ≈ 700-900 pixels for 1408x1408 images.
+    """
+    # Principal point at center (this is standard)
+    cx = image_width / 2.0
+    cy = image_height / 2.0
+    
+    # For fisheye cameras, focal length estimation is more complex
+    # but we can use empirical values based on typical Aria calibrations
+    if image_width == 1408 and image_height == 1408:
+        # Typical values for Aria RGB based on community reports
+        # These values result in more reasonable angular calculations
+        fx = fy = 800.0  # Empirical value that works better than FOV-based estimation
+        print(f"Using empirical Aria RGB intrinsics: fx=fy={fx}")
+    else:
+        # Fallback to FOV-based estimation for other cameras
+        half_fov_rad = np.deg2rad(fov_degrees / 2.0)
+        fx = (image_width / 2.0) / half_fov_rad
+        fy = (image_height / 2.0) / half_fov_rad
+        print(f"Using FOV-based estimation: fx={fx:.1f}, fy={fy:.1f}")
+    
+    return {
+        "fx": fx,
+        "fy": fy, 
+        "cx": cx,
+        "cy": cy
+    }
 
-def calculate_head_movement_with_fisheye_correction(
+def calculate_head_movement_spherical_model(
     prev_pos: Tuple[float, float],
     curr_pos: Tuple[float, float],
-    image_width: int,
-    image_height: int,
-    fov_degrees: float = 110.0,
-    distortion_model: str = "equidistant"
+    fx: float,
+    fy: float,
+    cx: float,
+    cy: float
 ) -> Optional[Dict[str, Any]]:
     """
-    Calculate head movement with proper fisheye lens distortion correction for Aria cameras.
+    Calculate head movement using Aria's spherical camera model.
+    
+    Aria spherical model:
+    u = fx * θ * cos(φ) + cx
+    v = fy * θ * sin(φ) + cy
+    
+    Where θ is the polar angle and φ is the azimuth angle.
     """
     
-    # Convert pixel coordinates to normalized coordinates [-1, 1]
-    def pixel_to_normalized(x: float, y: float) -> Tuple[float, float]:
-        norm_x = (2.0 * x / image_width) - 1.0
-        norm_y = (2.0 * y / image_height) - 1.0
-        return norm_x, norm_y
+    def pixel_to_angles(u: float, v: float) -> Tuple[float, float]:
+        """Convert pixel coordinates to spherical angles (θ, φ)"""
+        # Normalize pixel coordinates relative to principal point
+        u_norm = (u - cx) / fx
+        v_norm = (v - cy) / fy
+        
+        # Calculate spherical coordinates
+        theta = np.sqrt(u_norm**2 + v_norm**2)  # polar angle
+        phi = np.arctan2(v_norm, u_norm)        # azimuth angle
+        
+        return theta, phi
     
-    # Convert normalized coordinates to angular coordinates using fisheye model
-    def normalized_to_angular(norm_x: float, norm_y: float) -> Tuple[float, float]:
-        # Distance from center
-        r = np.sqrt(norm_x**2 + norm_y**2)
-        
-        # Maximum radius corresponds to half FOV
-        max_radius = 1.0  # normalized coordinate system goes from -1 to 1
-        half_fov_rad = np.deg2rad(fov_degrees / 2.0)
-        
-        if r > max_radius:
-            # Clamp to avoid extrapolation errors
-            r = max_radius
-            norm_x = norm_x * (max_radius / np.sqrt(norm_x**2 + norm_y**2))
-            norm_y = norm_y * (max_radius / np.sqrt(norm_x**2 + norm_y**2))
-        
-        if r < 1e-8:  # Avoid division by zero at center
-            return 0.0, 0.0
-        
-        # Apply inverse fisheye projection (equidistant model for Aria)
-        # r = f * θ (linear relationship between radius and angle)
-        theta = r * half_fov_rad
-        
-        # Convert back to Cartesian angular coordinates
-        phi = np.arctan2(norm_y, norm_x)  # azimuth angle
-        
-        # Convert spherical to Cartesian angular coordinates
-        angular_x = theta * np.cos(phi)  # horizontal angle
-        angular_y = theta * np.sin(phi)  # vertical angle
-        
-        return angular_x, angular_y
+    # Convert both positions to spherical angles
+    prev_theta, prev_phi = pixel_to_angles(prev_pos[0], prev_pos[1])
+    curr_theta, curr_phi = pixel_to_angles(curr_pos[0], curr_pos[1])
     
-    # Convert both positions to angular coordinates
-    prev_norm_x, prev_norm_y = pixel_to_normalized(prev_pos[0], prev_pos[1])
-    curr_norm_x, curr_norm_y = pixel_to_normalized(curr_pos[0], curr_pos[1])
+    # Convert to Cartesian angular coordinates for easier head movement calculation
+    prev_ang_x = prev_theta * np.cos(prev_phi)  # horizontal component
+    prev_ang_y = prev_theta * np.sin(prev_phi)  # vertical component
     
-    prev_ang_x, prev_ang_y = normalized_to_angular(prev_norm_x, prev_norm_y)
-    curr_ang_x, curr_ang_y = normalized_to_angular(curr_norm_x, curr_norm_y)
+    curr_ang_x = curr_theta * np.cos(curr_phi)
+    curr_ang_y = curr_theta * np.sin(curr_phi)
     
     # Calculate angular differences (head movement)
     # Note: For head movement, the direction is inverted
@@ -143,19 +159,28 @@ def calculate_head_movement_with_fisheye_correction(
 
 def calculate_head_movement(prev_red_pos, curr_red_pos, image_width, image_height, video_fov_degrees=104.0):
     """
-    Calculate head movement with automatic Aria detection and fisheye correction.
+    Calculate head movement with Aria spherical model for 1408x1408 images.
     """
     if prev_red_pos is None or curr_red_pos is None:
         return None
     
-    # Check if this is Aria RGB camera (1408x1408, 110° FOV)
+    # Check if this is Aria RGB camera (1408x1408)
     is_aria_rgb = (image_width == 1408 and image_height == 1408)
     
     if is_aria_rgb:
-        # Use fisheye correction for Aria RGB camera
-        print("Detected Aria RGB camera - using fisheye correction")
-        return calculate_head_movement_with_fisheye_correction(
-            prev_red_pos, curr_red_pos, image_width, image_height, fov_degrees=110.0
+        # Use Aria's spherical model
+        print("Detected Aria RGB camera - using spherical model")
+        
+        # Estimate intrinsic parameters from FOV
+        intrinsics = estimate_aria_intrinsics_from_fov(image_width, image_height, fov_degrees=110.0)
+        
+        print(f"Estimated Aria intrinsics: fx={intrinsics['fx']:.1f}, fy={intrinsics['fy']:.1f}, cx={intrinsics['cx']:.1f}, cy={intrinsics['cy']:.1f}")
+        
+        # Use spherical model for calculation
+        return calculate_head_movement_spherical_model(
+            prev_red_pos, curr_red_pos,
+            intrinsics["fx"], intrinsics["fy"], 
+            intrinsics["cx"], intrinsics["cy"]
         )
     else:
         # Use linear method for other cameras
@@ -184,9 +209,13 @@ def calculate_head_movement(prev_red_pos, curr_red_pos, image_width, image_heigh
             }
         }
 
-def remap_position_from_movement_fisheye(start_pos, head_movement, image_width, image_height, fov_degrees=110.0):
+def remap_position_from_movement_spherical(
+    start_pos: Tuple[float, float],
+    head_movement: Dict[str, Any],
+    fx: float, fy: float, cx: float, cy: float
+) -> Optional[Tuple[float, float]]:
     """
-    Remap position using fisheye correction for Aria cameras.
+    Remap position using spherical model.
     """
     if start_pos is None or head_movement is None:
         return None
@@ -194,45 +223,34 @@ def remap_position_from_movement_fisheye(start_pos, head_movement, image_width, 
     if np.isnan(head_movement['horizontal']['radians']) or np.isnan(head_movement['vertical']['radians']):
         return None
     
-    # Convert starting position to normalized coordinates
-    start_norm_x = (2.0 * start_pos[0] / image_width) - 1.0
-    start_norm_y = (2.0 * start_pos[1] / image_height) - 1.0
+    # Convert starting position to spherical angles
+    u_norm = (start_pos[0] - cx) / fx
+    v_norm = (start_pos[1] - cy) / fy
     
-    # Convert to angular coordinates
-    start_r = np.sqrt(start_norm_x**2 + start_norm_y**2)
-    half_fov_rad = np.deg2rad(fov_degrees / 2.0)
+    start_theta = np.sqrt(u_norm**2 + v_norm**2)
+    start_phi = np.arctan2(v_norm, u_norm)
     
-    if start_r < 1e-8:
-        start_ang_x, start_ang_y = 0.0, 0.0
-    else:
-        start_theta = start_r * half_fov_rad
-        start_phi = np.arctan2(start_norm_y, start_norm_x)
-        start_ang_x = start_theta * np.cos(start_phi)
-        start_ang_y = start_theta * np.sin(start_phi)
+    # Convert to Cartesian angular coordinates
+    start_ang_x = start_theta * np.cos(start_phi)
+    start_ang_y = start_theta * np.sin(start_phi)
     
     # Apply head movement (note: movement is inverted, so we add it back)
     new_ang_x = start_ang_x - head_movement['horizontal']['radians']
     new_ang_y = start_ang_y - head_movement['vertical']['radians']
     
-    # Convert back to pixel coordinates
+    # Convert back to spherical coordinates
     new_theta = np.sqrt(new_ang_x**2 + new_ang_y**2)
-    if new_theta < 1e-8:
-        new_norm_x, new_norm_y = 0.0, 0.0
-    else:
-        new_phi = np.arctan2(new_ang_y, new_ang_x)
-        new_r = new_theta / half_fov_rad
-        new_norm_x = new_r * np.cos(new_phi)
-        new_norm_y = new_r * np.sin(new_phi)
+    new_phi = np.arctan2(new_ang_y, new_ang_x) if new_theta > 1e-8 else 0.0
     
-    # Convert normalized coordinates back to pixels
-    predicted_x = (new_norm_x + 1.0) * image_width / 2.0
-    predicted_y = (new_norm_y + 1.0) * image_height / 2.0
+    # Convert back to pixel coordinates using spherical model
+    predicted_u = fx * new_theta * np.cos(new_phi) + cx
+    predicted_v = fy * new_theta * np.sin(new_phi) + cy
     
-    return (predicted_x, predicted_y)
+    return (predicted_u, predicted_v)
 
 def remap_position_from_movement(start_pos, head_movement, image_width, image_height, video_fov_degrees=104.0):
     """
-    Remap position from head movement with automatic Aria detection.
+    Remap position from head movement with Aria spherical model support.
     """
     if start_pos is None or head_movement is None or np.isnan(head_movement['horizontal']['radians']):
         return None
@@ -241,9 +259,13 @@ def remap_position_from_movement(start_pos, head_movement, image_width, image_he
     is_aria_rgb = (image_width == 1408 and image_height == 1408)
     
     if is_aria_rgb:
-        # Use fisheye correction for Aria RGB camera
-        return remap_position_from_movement_fisheye(
-            start_pos, head_movement, image_width, image_height, fov_degrees=110.0
+        # Use Aria's spherical model
+        intrinsics = estimate_aria_intrinsics_from_fov(image_width, image_height, fov_degrees=110.0)
+        
+        return remap_position_from_movement_spherical(
+            start_pos, head_movement,
+            intrinsics["fx"], intrinsics["fy"],
+            intrinsics["cx"], intrinsics["cy"]
         )
     else:
         # Use linear method for other cameras
@@ -253,9 +275,17 @@ def remap_position_from_movement(start_pos, head_movement, image_width, image_he
         horizontal_angle_degrees = np.degrees(horizontal_radians)
         vertical_angle_degrees = np.degrees(vertical_radians)
 
-        aspect_ratio = image_width / image_height
-        vertical_fov_degrees = video_fov_degrees / aspect_ratio
-        horizontal_pixels_per_degree = image_width / video_fov_degrees
+        # For square images (like Aria 1408x1408), both FOVs should be the same
+        if image_width == image_height:
+            horizontal_fov_degrees = video_fov_degrees
+            vertical_fov_degrees = video_fov_degrees
+        else:
+            # For rectangular images, calculate vertical FOV based on aspect ratio
+            aspect_ratio = image_width / image_height
+            horizontal_fov_degrees = video_fov_degrees
+            vertical_fov_degrees = video_fov_degrees / aspect_ratio
+        
+        horizontal_pixels_per_degree = image_width / horizontal_fov_degrees
         vertical_pixels_per_degree = image_height / vertical_fov_degrees
 
         horizontal_pixel_change = -horizontal_angle_degrees * horizontal_pixels_per_degree
@@ -265,39 +295,3 @@ def remap_position_from_movement(start_pos, head_movement, image_width, image_he
         predicted_y = start_pos[1] + vertical_pixel_change
 
         return (predicted_x, predicted_y)
-
-# Test function to compare methods
-def test_aria_vs_linear():
-    """
-    Test function to show the difference between linear and fisheye methods.
-    """
-    print("Testing Aria RGB vs Linear methods:")
-    print("=" * 50)
-    
-    # Aria RGB specs
-    aria_w, aria_h = 1408, 1408
-    
-    # Test movements at different positions
-    test_cases = [
-        ((704, 704), (754, 704), "Center - 50px right"),
-        ((200, 704), (250, 704), "Left edge - 50px right"),
-        ((1200, 704), (1250, 704), "Right edge - 50px right"),
-        ((704, 704), (804, 704), "Center - 100px right"),
-        ((1000, 1000), (1100, 1100), "Near corner - diagonal"),
-    ]
-    
-    for prev_pos, curr_pos, desc in test_cases:
-        # Linear method
-        linear_result = calculate_head_movement(prev_pos, curr_pos, 640, 480, 104.0)  # Force linear
-        
-        # Fisheye method (force Aria detection)
-        fisheye_result = calculate_head_movement(prev_pos, curr_pos, aria_w, aria_h, 104.0)
-        
-        print(f"\n{desc}:")
-        if linear_result:
-            print(f"  Linear:   {linear_result['horizontal']['degrees']:6.2f}° H, {linear_result['vertical']['degrees']:6.2f}° V")
-        if fisheye_result:
-            print(f"  Fisheye:  {fisheye_result['horizontal']['degrees']:6.2f}° H, {fisheye_result['vertical']['degrees']:6.2f}° V")
-
-if __name__ == "__main__":
-    test_aria_vs_linear()
