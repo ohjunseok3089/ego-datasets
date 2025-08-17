@@ -115,11 +115,9 @@ while IFS= read -r -d '' subdir; do
     echo "=============================================="
     
     # Run track_prediction_past_frame.py for this subdirectory
-    python_cmd="python3 \"$PYTHON_SCRIPT\" \"$subdir\" --output_dir \"$OUTPUT_DIR\" --mode $MODE"
+    echo "Executing: python3 \"$PYTHON_SCRIPT\" \"$subdir\" --output_dir \"$OUTPUT_DIR\" --mode $MODE"
     
-    echo "Executing: $python_cmd"
-    
-    if eval $python_cmd; then
+    if python3 "$PYTHON_SCRIPT" "$subdir" --output_dir "$OUTPUT_DIR" --mode "$MODE"; then
         echo "✓ Successfully processed: $subdir_name"
         ((processed_dirs++))
     else

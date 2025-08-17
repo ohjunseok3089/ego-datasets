@@ -1,161 +1,172 @@
+import json
 import csv
-import ast
+import os
 from pathlib import Path
-from typing import List, Dict, Union, Iterable
+from collections import defaultdict
 
-# 사용자가 지정해야 할 해상도
-W = 1920  # 원하는 너비
-H = 1080  # 원하는 높이
+def load_json_annotations(train_path, val_path):
+    """Load and combine train and validation JSON annotations"""
+    videos_data = {}
+    
+    # Load train data
+    with open(train_path, 'r') as f:
+        train_data = json.load(f)
+        for video in train_data['videos']:
+            video_uid = video['video_uid']
+            videos_data[video_uid] = video
+    
+    # Load validation data
+    with open(val_path, 'r') as f:
+        val_data = json.load(f)
+        for video in val_data['videos']:
+            video_uid = video['video_uid']
+            videos_data[video_uid] = video
+    
+    return videos_data
 
-# 처리할 video_uids (persons에 해당)
-TARGET_VIDEO_UIDS = {
-    "30294c41-c90d-438a-af19-c1c74787d06b",
-    "566ad4e5-1ce4-4679-9d19-ef63072c848c",
-    "9c5b7322-d1cc-4b56-ae9d-85831f28fac1",
-    "9ca2dc18-2c57-44cb-8c91-4b8b5c7ca223",
-    "a223fcb2-8ffa-4826-bd0c-91027cf1c11e",
-    "b3937482-c973-4263-957d-1d5366329dad",
-}
-
-def parse_frame_field(frame_val: Union[str, List[int], None]) -> List[int]:
-    """
-    frame 필드를 리스트[int]로 파싱.
-    - 이미 리스트면 그대로
-    - 문자열이면 literal_eval 시도 후 리스트화
-    - None/빈 값이면 빈 리스트
-    """
-    if frame_val is None:
-        return []
-    if isinstance(frame_val, list):
-        return [int(x) for x in frame_val]
-    s = str(frame_val).strip()
-    if not s:
-        return []
-    # 쉼표로만 구분된 경우도 허용: "5,6,7"
-    if s.startswith('[') and s.endswith(']'):
-        try:
-            parsed = ast.literal_eval(s)
-            if isinstance(parsed, (list, tuple)):
-                return [int(x) for x in parsed]
-        except Exception:
-            pass
-    # 대괄호가 없으면 쉼표 분리 시도
-    try:
-        return [int(x.strip()) for x in s.split(',') if x.strip()]
-    except Exception:
-        return []
-
-def load_transcript_rows(transcript_csv_path: Union[str, Path]) -> Iterable[Dict[str, str]]:
-    with open(transcript_csv_path, 'r', encoding='utf-8') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            yield row
-
-def build_per_video_annotations(
-    transcript_csv_path: Union[str, Path],
-    w: int = W,
-    h: int = H,
-    target_video_uids: set = TARGET_VIDEO_UIDS
-) -> Dict[str, List[Dict[str, Union[int, str]]]]:
-    """
-    transcript CSV를 읽어 각 video_uid별로 어노테이션 레코드 생성.
-    반환: {video_uid: [records...]}
-    record 필드: frame_number, person_id, x1, y1, x2, y2, speaker_id
-    """
-    per_video: Dict[str, List[Dict[str, Union[int, str]]]] = {}
-
-    for row in load_transcript_rows(transcript_csv_path):
-        video_uid = (row.get('conversation_id') or '').strip()
-        if not video_uid or video_uid not in target_video_uids:
-            continue
-
-        # speaker_id -> person_id
-        spk_raw = row.get('speaker_id', '').strip()
-        if spk_raw == '':
-            continue
-        try:
-            speaker_id = int(spk_raw)
-        except ValueError:
-            # speaker_id가 숫자가 아니면 스킵
-            continue
-
-        if speaker_id == 0:
-            # 규칙: person_id가 0이면 제외
-            continue
-
-        frames = parse_frame_field(row.get('frame'))
-        if not frames:
-            # 프레임이 없으면 생성할 레코드 없음
-            continue
-
-        # 레코드 생성: x1=0, y1=0, x2=w, y2=h
-        recs = []
-        for fr in frames:
-            recs.append({
-                'frame_number': int(fr),
-                'person_id': speaker_id,
-                'x1': 0,
-                'y1': 0,
-                'x2': int(w),
-                'y2': int(h),
-                'speaker_id': speaker_id,
-            })
-
-        if video_uid not in per_video:
-            per_video[video_uid] = []
-        per_video[video_uid].extend(recs)
-
-    # 프레임 순서대로 정렬
-    for vid, items in per_video.items():
-        items.sort(key=lambda x: (x['frame_number'], x['person_id']))
-
-    return per_video
-
-def write_video_csvs(
-    per_video_records: Dict[str, List[Dict[str, Union[int, str]]]],
-    output_dir: Union[str, Path]
-):
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    header = ['frame_number', 'person_id', 'x1', 'y1', 'x2', 'y2', 'speaker_id']
-
-    for video_uid, records in per_video_records.items():
-        out_path = output_dir / f"{video_uid}.csv"
-        with open(out_path, 'w', encoding='utf-8', newline='') as f:
-            writer = csv.DictWriter(f, fieldnames=header)
+def process_face_detection(video_uid, video_data, output_dir):
+    """Process face detection data from tracking paths"""
+    face_detection_path = os.path.join(output_dir, 'face_detection', f'{video_uid}.csv')
+    os.makedirs(os.path.dirname(face_detection_path), exist_ok=True)
+    
+    face_data = []
+    
+    # Process each clip in the video
+    for clip in video_data.get('clips', []):
+        # Process persons (excluding camera wearer)
+        for person in clip.get('persons', []):
+            person_id = person.get('person_id', '')
+            
+            # Skip if person_id is '0' or empty
+            if not person_id or person_id == '0':
+                continue
+                
+            # Process tracking paths for this person
+            for track_data in person.get('tracking_paths', []):
+                for track_item in track_data.get('track', []):
+                    frame_number = track_item.get('video_frame', track_item.get('frame', 0))
+                    x1 = track_item.get('x', 0)
+                    y1 = track_item.get('y', 0)
+                    width = track_item.get('width', 0)
+                    height = track_item.get('height', 0)
+                    
+                    # x2 and y2 are width and height as per requirement
+                    face_data.append({
+                        'frame_number': frame_number,
+                        'person_id': person_id,
+                        'x1': x1,
+                        'x2': width,  # x2 is width
+                        'y1': y1,
+                        'y2': height,  # y2 is height
+                        'speaker_id': person_id  # speaker_id is same as person_id
+                    })
+    
+    # Sort by frame number for better readability
+    face_data.sort(key=lambda x: (x['frame_number'], x['person_id']))
+    
+    # Write to CSV
+    if face_data:
+        with open(face_detection_path, 'w', newline='') as f:
+            fieldnames = ['frame_number', 'person_id', 'x1', 'x2', 'y1', 'y2', 'speaker_id']
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
-            for r in records:
-                writer.writerow({
-                    'frame_number': r['frame_number'],
-                    'person_id': r['person_id'],
-                    'x1': r['x1'],
-                    'y1': r['y1'],
-                    'x2': r['x2'],
-                    'y2': r['y2'],
-                    'speaker_id': r['speaker_id'],
-                })
+            writer.writerows(face_data)
+        print(f"Created face detection file: {face_detection_path}")
+    
+    return len(face_data)
 
-def main(
-    transcript_csv_path: Union[str, Path],
-    output_dir: Union[str, Path],
-    w: int = W,
-    h: int = H,
-    target_video_uids: set = TARGET_VIDEO_UIDS
-):
-    per_video = build_per_video_annotations(
-        transcript_csv_path=transcript_csv_path,
-        w=w,
-        h=h,
-        target_video_uids=target_video_uids
-    )
-    write_video_csvs(per_video, output_dir)
-    print(f"Done. Wrote {len(per_video)} video files to {output_dir}")
+def process_transcriptions(video_uid, video_data, output_dir):
+    """Process transcription data"""
+    transcript_path = os.path.join(output_dir, 'transcript', 'ground_truth_transcriptions_with_frames.csv')
+    os.makedirs(os.path.dirname(transcript_path), exist_ok=True)
+    
+    transcription_data = []
+    
+    # Process each clip in the video
+    for clip in video_data.get('clips', []):
+        # Process transcriptions
+        for trans in clip.get('transcriptions', []):
+            person_id = trans.get('person_id', '')
+            
+            # Skip if person_id is '0' or empty
+            if not person_id or person_id == '0':
+                continue
+            
+            # Split transcription into words
+            transcription_text = trans.get('transcription', '')
+            start_time = trans.get('video_start_time', trans.get('start_time_sec', 0))
+            end_time = trans.get('video_end_time', trans.get('end_time_sec', 0))
+            
+            # Simple word splitting - distribute time evenly across words
+            words = transcription_text.split()
+            if words:
+                time_per_word = (end_time - start_time) / len(words)
+                
+                for i, word in enumerate(words):
+                    word_start = start_time + (i * time_per_word)
+                    word_end = start_time + ((i + 1) * time_per_word)
+                    
+                    transcription_data.append({
+                        'conversation_id': video_uid,  # Using video_uid as conversation_id
+                        'endTime': round(word_end, 2),
+                        'speaker_id': person_id,
+                        'startTime': round(word_start, 2),
+                        'word': word
+                    })
+    
+    # Write or append to CSV
+    file_exists = os.path.exists(transcript_path)
+    
+    if transcription_data:
+        with open(transcript_path, 'a' if file_exists else 'w', newline='') as f:
+            fieldnames = ['conversation_id', 'endTime', 'speaker_id', 'startTime', 'word']
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            
+            if not file_exists:
+                writer.writeheader()
+            
+            writer.writerows(transcription_data)
+        
+        print(f"{'Appended to' if file_exists else 'Created'} transcript file: {transcript_path}")
+    
+    return len(transcription_data)
+
+def main():
+    # Paths
+    train_json_path = '/mas/robots/prg-ego4d/raw/v2/annotations/av_train.json'
+    val_json_path = '/mas/robots/prg-ego4d/raw/v2/annotations/av_val.json'
+    output_base_dir = '/mas/robots/prg-ego4d'
+    
+    # Target video UIDs
+    target_videos = {
+        '30294c41-c90d-438a-af19-c1c74787d06b',  # train
+        '566ad4e5-1ce4-4679-9d19-ef63072c848c',  # val
+        '9c5b7322-d1cc-4b56-ae9d-85831f28fac1',  # val
+        '9ca2dc18-2c57-44cb-8c91-4b8b5c7ca223',  # val
+        'a223fcb2-8ffa-4826-bd0c-91027cf1c11e',  # val
+        'b3937482-c973-4263-957d-1d5366329dad'   # train
+    }
+    
+    print("Loading JSON annotations...")
+    videos_data = load_json_annotations(train_json_path, val_json_path)
+    print(f"Loaded data for {len(videos_data)} videos")
+    
+    # Process each target video
+    for video_uid in target_videos:
+        if video_uid in videos_data:
+            print(f"\nProcessing video: {video_uid}")
+            
+            # Process face detection data
+            face_count = process_face_detection(video_uid, videos_data[video_uid], output_base_dir)
+            print(f"  - Processed {face_count} face detection entries")
+            
+            # Process transcription data
+            trans_count = process_transcriptions(video_uid, videos_data[video_uid], output_base_dir)
+            print(f"  - Processed {trans_count} transcription word entries")
+        else:
+            print(f"\nWarning: Video {video_uid} not found in the loaded data")
+    
+    print("\nProcessing complete!")
 
 if __name__ == "__main__":
-    main(
-    # 사용 예시:
-    # python script.py 처럼 직접 실행하지 않는다면,
-    # 아래 main 호출 부분을 주석 처리하고 외부에서 호출해도 됩니다.
-    # main("path/to/transcript.csv", "out_dir", w=1920, h=1080)
-    pass
+    main()
