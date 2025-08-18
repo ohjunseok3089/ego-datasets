@@ -128,7 +128,7 @@ for ((gpu=0; gpu<num_gpus; gpu++)); do
         echo "echo \"[GPU $gpu] Processing video: \$escaped_basename\"" >> $temp_script
         echo "echo \"[GPU $gpu] Video path: \$video_file\"" >> $temp_script
         echo "echo \"[GPU $gpu] Running CoTracker on \$escaped_basename...\"" >> $temp_script
-        echo "CUDA_VISIBLE_DEVICES=$gpu PYTHONPATH=.. python main.py --video_path \"\$video_file\" --grid_size 30 --grid_query_frame 0 --save_dir \"/mas/robots/prg-egocom/EGOCOM/720p/5min_parts/co-tracker\"" >> $temp_script
+        echo "CUDA_VISIBLE_DEVICES=$gpu PYTHONPATH=.. python main.py --video_path \"\$video_file\" --grid_size 30 --grid_query_frame 0 --save_dir \"/mas/robots/prg-aria/co-tracker\"" >> $temp_script
         echo "exit_code=\$?" >> $temp_script
         echo "if [ \$exit_code -eq 0 ]; then" >> $temp_script
         echo "  echo \"[GPU $gpu] SUCCESS: Successfully processed \$escaped_basename\"" >> $temp_script
@@ -151,4 +151,4 @@ done
 echo "================================"
 echo "Batch $BATCH_NUM processing launched in 4 parallel screen sessions!"
 echo "Use 'screen -ls' to see running sessions. Attach with 'screen -r cotracker_batch${BATCH_NUM}_gpuX' (X=0,1,2,3)."
-echo "Output videos saved in: /mas/robots/prg-egocom/EGOCOM/720p/20min/co-tracker/" 
+echo "Output videos saved in: /mas/robots/prg-aria/co-tracker/" 
