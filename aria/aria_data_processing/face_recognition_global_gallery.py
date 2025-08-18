@@ -85,73 +85,50 @@ def main(args):
     app = FaceAnalysis(name='buffalo_l', providers=[args.execution_provider])
     app.prepare(ctx_id=0, det_size=(640, 640))
     
-    try:
-        search_pattern = os.path.join(args.search_path, '*.MP4')
-        all_mp4_files = glob.glob(search_pattern)
-        video_files = sorted([f for f in all_mp4_files if args.pattern_to_match in os.path.basename(f)])
-        if not video_files:
-            print(f"Error: No video files found in '{args.search_path}' containing the pattern '{args.pattern_to_match}'")
-            return
-        print(f"\nFound {len(video_files)} matching video files for pattern '{args.pattern_to_match}':")
-        for f in video_files: print(f"  - {os.path.basename(f)}")
-    except Exception as e:
-        print(f"Error finding video files: {e}")
+    # Check if the video file exists
+    if not os.path.exists(args.video_path):
+        print(f"Error: Video file '{args.video_path}' does not exist!")
         return
+    
+    print(f"\nProcessing single video file: {os.path.basename(args.video_path)}")
 
-    print("\n--- Creating Global Gallery ---")
+    print("\n--- Processing Video ---")
     start_time = time.time()
     
-    first_video_path = video_files[0]
-    print(f"Step 1: Creating gallery from '{os.path.basename(first_video_path)}'...")
-    part1_data = extract_embeddings(first_video_path, app)
+    print(f"Step 1: Extracting faces from '{os.path.basename(args.video_path)}'...")
+    video_data = extract_embeddings(args.video_path, app)
     
-    gallery_embeddings = []
-    gallery_ids = []
-    if not part1_data:
-        print("Error: No faces found in the first video to create a gallery. Aborting this group.")
+    if not video_data:
+        print("Error: No faces found in the video.")
         return
     
-    part1_embeddings = np.array([data['embedding'] for data in part1_data])
+    print(f"Step 2: Clustering faces to identify unique people...")
+    embeddings = np.array([data['embedding'] for data in video_data])
     clusterer = hdbscan.HDBSCAN(min_cluster_size=args.min_cluster_size, metric='euclidean')
-    labels = clusterer.fit_predict(part1_embeddings)
+    labels = clusterer.fit_predict(embeddings)
+    
+    # Assign person IDs based on clustering
+    for i, data in enumerate(video_data):
+        if labels[i] == -1:  # Noise/outlier
+            data['person_id'] = 'unknown'
+        else:
+            data['person_id'] = f"person_{labels[i] + 1}"
     
     num_clusters = len(set(labels)) - (1 if -1 in labels else 0)
-    for i in range(num_clusters):
-        cluster_indices = np.where(labels == i)[0]
-        gallery_embeddings.append(np.mean(part1_embeddings[cluster_indices], axis=0))
-        gallery_ids.append(f"person_{i+1}")
+    print(f"Found {num_clusters} unique people in the video.")
     
-    print(f"Gallery created with {len(gallery_ids)} unique people.")
-
-    for video_path in video_files:
-        print(f"\nStep 2: Processing '{os.path.basename(video_path)}' using gallery...")
-        video_data = extract_embeddings(video_path, app)
-        if not video_data: continue
-
-        for data in video_data:
-            if not gallery_embeddings:
-                data['person_id'] = 'unknown'
-                continue
-            distances = 1 - np.dot(gallery_embeddings, data['embedding'])
-            best_match_index = np.argmin(distances)
-            
-            if distances[best_match_index] < args.recognition_threshold:
-                data['person_id'] = gallery_ids[best_match_index]
-            else:
-                data['person_id'] = 'unknown'
-        
-        save_outputs(video_path, video_data, args.output_dir)
+    print(f"Step 3: Saving results...")
+    save_outputs(args.video_path, video_data, args.output_dir)
 
     end_time = time.time()
-    print(f"\nFinished processing group '{args.pattern_to_match}' in {end_time - start_time:.2f} seconds.")
+    print(f"\nFinished processing '{os.path.basename(args.video_path)}' in {end_time - start_time:.2f} seconds.")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Face recognition using a global gallery created from the first video of a group.")
-    parser.add_argument('--search_path', type=str, required=True, help="Directory path to search for videos.")
-    parser.add_argument('--pattern_to_match', type=str, required=True, help="Unique pattern to identify a group of videos (e.g., 'day_1__con_1__person_1').")
+    parser = argparse.ArgumentParser(description="Face recognition for a single video file.")
+    parser.add_argument('--video_path', type=str, required=True, help="Path to the video file to process.")
     parser.add_argument('--output_dir', type=str, default="processed_videos", help="Directory to save output files.")
-    parser.add_argument('--min_cluster_size', type=int, default=75, help="Minimum cluster size for HDBSCAN.")
+    parser.add_argument('--min_cluster_size', type=int, default=5, help="Minimum cluster size for HDBSCAN.")
     parser.add_argument('--recognition_threshold', type=float, default=0.8, help="Cosine distance threshold for recognition.")
     parser.add_argument('--execution_provider', type=str, default='CUDAExecutionProvider', help="Execution provider for ONNX Runtime (e.g., 'CoreMLExecutionProvider', 'CUDAExecutionProvider', 'CPUExecutionProvider').")
     

@@ -24,7 +24,7 @@ mkdir -p "$OUTPUT_DIR"
 echo "Finding video files..."
 
 video_files=()
-for f in "$BASE_DIR"/*.MP4; do
+for f in "$BASE_DIR"/*.mp4; do
     if [ -f "$f" ]; then
         video_files+=("$f")
     fi
