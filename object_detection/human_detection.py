@@ -403,6 +403,14 @@ if __name__ == "__main__":
     # Construct face recognition CSV path
     input_dir = os.path.dirname(input_path)
     # face_csv_path = os.path.join(input_dir, "processed_face_recognition_videos", f"{video_filename_base}_global_gallery.csv")
-    face_csv_path = os.path.join(input_dir, "face_detection", f"{video_filename_base}.csv") # ego4d
+    # Go up to the parent directory of full_scale to access face_detection
+    base_dir = os.path.dirname(os.path.dirname(input_dir))  # Go up from full_scale/v2 to prg-ego4d
+    face_csv_path = os.path.join(base_dir, "face_detection", f"{video_filename_base}.csv") # ego4d
+    
+    print(f"Input video: {input_path}")
+    print(f"Input dir: {input_dir}")
+    print(f"Base dir: {base_dir}")
+    print(f"Looking for face CSV at: {face_csv_path}")
+    print(f"Face CSV exists: {os.path.exists(face_csv_path)}")
     
     process_video_with_yolo(input_path, output_video_path, output_csv_path, face_csv_path)
