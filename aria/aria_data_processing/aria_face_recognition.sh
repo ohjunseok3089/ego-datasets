@@ -20,40 +20,34 @@ fi
 # Create output directory if it doesn't exist
 mkdir -p "$OUTPUT_DIR"
 
-# Step 1: Find all video files and group them by their common pattern
-declare -A video_groups
-echo "Grouping video files..."
+# Step 1: Find all video files
+echo "Finding video files..."
 
+video_files=()
 for f in "$BASE_DIR"/*.MP4; do
     if [ -f "$f" ]; then
-        filename=$(basename "$f")
-        pattern=$(echo "$filename" | sed -E 's/vid_[0-9]+__(.*)_part[0-9]+\.MP4/\1/')
-        # pattern=$(echo "$filename" | sed -E 's/vid_[0-9]+__(.*)\.MP4/\1/')
-        if [[ -n "$pattern" && "$pattern" != "$filename" ]]; then
-            video_groups["$pattern"]+="$f "
-        fi
+        video_files+=("$f")
     fi
 done
 
-mapfile -t patterns < <(printf "%s\n" "${!video_groups[@]}" | sort)
-num_groups=${#patterns[@]}
+num_videos=${#video_files[@]}
 
-if [ "$num_groups" -eq 0 ]; then
-    echo "No valid video groups found to process."
+if [ "$num_videos" -eq 0 ]; then
+    echo "No valid video files found to process."
     exit 1
 fi
 
-echo "Found $num_groups unique video groups to process."
+echo "Found $num_videos video files to process."
 
-# Step 2: Distribute the groups across the available GPUs
+# Step 2: Distribute the video files across the available GPUs
 declare -a gpu_jobs
 for ((i=0; i<NUM_GPUS; i++)); do
     gpu_jobs[$i]=""
 done
 
-for ((i=0; i<num_groups; i++)); do
+for ((i=0; i<num_videos; i++)); do
     gpu_index=$((i % NUM_GPUS))
-    gpu_jobs[$gpu_index]+="${patterns[$i]};"
+    gpu_jobs[$gpu_index]+="${video_files[$i]};"
 done
 
 # Step 3: Launch parallel screen sessions for each GPU
@@ -83,14 +77,14 @@ for ((gpu=0; gpu<NUM_GPUS; gpu++)); do
     echo "export LD_LIBRARY_PATH=$CUDA_LIB_PATH:\$LD_LIBRARY_PATH" >> "$temp_script"
     # -------------------------------------------
 
-    echo "IFS=';' read -ra patterns_to_process <<< \"$job_list\"" >> "$temp_script"
-    echo "for pattern in \"\${patterns_to_process[@]}\"; do" >> "$temp_script"
-    echo "    if [ -n \"\$pattern\" ]; then" >> "$temp_script"
+    echo "IFS=';' read -ra videos_to_process <<< \"$job_list\"" >> "$temp_script"
+    echo "for video_file in \"\${videos_to_process[@]}\"; do" >> "$temp_script"
+    echo "    if [ -n \"\$video_file\" ]; then" >> "$temp_script"
+    echo "        filename=\$(basename \"\$video_file\")" >> "$temp_script"
     echo "        echo \"[GPU $gpu] --------------------------------------------------\"" >> "$temp_script"
-    echo "        echo \"[GPU $gpu] Processing group: \$pattern\"" >> "$temp_script"
+    echo "        echo \"[GPU $gpu] Processing video: \$filename\"" >> "$temp_script"
     echo "        CUDA_VISIBLE_DEVICES=$gpu python face_recognition_global_gallery.py \\" >> "$temp_script"
-    echo "            --search_path \"$BASE_DIR\" \\" >> "$temp_script"
-    echo "            --pattern_to_match \"\$pattern\" \\" >> "$temp_script"
+    echo "            --video_path \"\$video_file\" \\" >> "$temp_script"
     echo "            --output_dir \"$OUTPUT_DIR\"" >> "$temp_script"
     echo "    fi" >> "$temp_script"
     echo "done" >> "$temp_script"
