@@ -407,7 +407,7 @@ if __name__ == "__main__":
     # input_dir = os.path.dirname(input_path)
     # base_dir = os.path.dirname(os.path.dirname(os.path.dirname(input_dir)))  # Go up from full_scale/v2/raw to prg-ego4d
     base_dir = "/mas/robots/prg-aria/"
-    face_csv_path = os.path.join(base_dir, "processed_face_recognition_videos", f"{video_filename_base}.csv") # ego4d
+    face_csv_path = os.path.join(base_dir, "processed_face_recognition_videos", f"{video_filename_base}_global_gallery.csv") # ego4d
 
     print(f"Input video: {input_path}")
     # print(f"Input dir: {input_dir}")
