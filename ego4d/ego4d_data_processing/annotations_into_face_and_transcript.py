@@ -72,22 +72,26 @@ def process_face_detection(video_uid, video_data, output_dir):
             for track_data in person.get('tracking_paths', []):
                 for track_item in track_data.get('track', []):
                     frame_number = track_item.get('video_frame', track_item.get('frame', 0))
-                    x1 = track_item.get('x', 0)
-                    y1 = track_item.get('y', 0)
+                    x = track_item.get('x', 0)
+                    y = track_item.get('y', 0)
                     width = track_item.get('width', 0)
                     height = track_item.get('height', 0)
                     
-                    # x2 and y2 are width and height as per requirement
+                    # Convert from Ego4D format (x, y, width, height) to (x1, y1, x2, y2)
+                    x1 = x
+                    y1 = y
+                    x2 = x + width
+                    y2 = y + height
+                    
                     face_data.append({
                         'frame_number': frame_number,
                         'person_id': person_id,
                         'x1': x1,
-                        'x2': width,  # x2 is width
+                        'x2': x2,
                         'y1': y1,
-                        'y2': height,  # y2 is height
+                        'y2': y2,
                         'speaker_id': person_id  # speaker_id is same as person_id
                     })
-    
     # Sort by frame number for better readability
     face_data.sort(key=lambda x: (x['frame_number'], x['person_id']))
     
