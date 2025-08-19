@@ -404,13 +404,14 @@ if __name__ == "__main__":
     output_csv_path = os.path.join(output_dir, f"{video_filename_base}_detections.csv")
 
     # Construct face recognition CSV path
-    input_dir = os.path.dirname(input_path)
-    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(input_dir)))  # Go up from full_scale/v2/raw to prg-ego4d
-    face_csv_path = os.path.join(base_dir, "face_detection", f"{video_filename_base}.csv") # ego4d
+    # input_dir = os.path.dirname(input_path)
+    # base_dir = os.path.dirname(os.path.dirname(os.path.dirname(input_dir)))  # Go up from full_scale/v2/raw to prg-ego4d
+    base_dir = "/mas/robots/prg-aria/"
+    face_csv_path = os.path.join(base_dir, "processed_face_recognition_videos", f"{video_filename_base}.csv") # ego4d
 
     print(f"Input video: {input_path}")
-    print(f"Input dir: {input_dir}")
-    print(f"Base dir: {base_dir}")
+    # print(f"Input dir: {input_dir}")
+    # print(f"Base dir: {base_dir}")
     print(f"Looking for face CSV at: {face_csv_path}")
     print(f"Face CSV exists: {os.path.exists(face_csv_path)}")
 

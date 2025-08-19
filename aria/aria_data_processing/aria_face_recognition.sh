@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # --- Configuration ---
-BASE_DIR="/mas/robots/prg-aria/parts/"
+BASE_DIR="/mas/robots/prg-aria/dataset/"
 OUTPUT_DIR="/mas/robots/prg-aria/processed_face_recognition_videos/"
 NUM_GPUS=4
 CONDA_ENV_NAME="ego-dataset"
