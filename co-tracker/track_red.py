@@ -258,40 +258,40 @@ def remap_position_from_movement(start_pos, head_movement, image_width, image_he
     # Check if this is Aria RGB camera
     is_aria_rgb = (image_width == 1408 and image_height == 1408)
     
-    if is_aria_rgb:
-        # Use Aria's spherical model
-        intrinsics = estimate_aria_intrinsics_from_fov(image_width, image_height, fov_degrees=110.0)
+    # if is_aria_rgb:
+    #     # Use Aria's spherical model
+    #     intrinsics = estimate_aria_intrinsics_from_fov(image_width, image_height, fov_degrees=110.0)
         
-        return remap_position_from_movement_spherical(
-            start_pos, head_movement,
-            intrinsics["fx"], intrinsics["fy"],
-            intrinsics["cx"], intrinsics["cy"]
-        )
+    #     return remap_position_from_movement_spherical(
+    #         start_pos, head_movement,
+    #         intrinsics["fx"], intrinsics["fy"],
+    #         intrinsics["cx"], intrinsics["cy"]
+    #     )
+    # else:
+    # Use linear method for other cameras
+    horizontal_radians = head_movement['horizontal']['radians']
+    vertical_radians = head_movement['vertical']['radians']
+
+    horizontal_angle_degrees = np.degrees(horizontal_radians)
+    vertical_angle_degrees = np.degrees(vertical_radians)
+
+    # For square images (like Aria 1408x1408), both FOVs should be the same
+    if image_width == image_height:
+        horizontal_fov_degrees = video_fov_degrees
+        vertical_fov_degrees = video_fov_degrees
     else:
-        # Use linear method for other cameras
-        horizontal_radians = head_movement['horizontal']['radians']
-        vertical_radians = head_movement['vertical']['radians']
+        # For rectangular images, calculate vertical FOV based on aspect ratio
+        aspect_ratio = image_width / image_height
+        horizontal_fov_degrees = video_fov_degrees
+        vertical_fov_degrees = video_fov_degrees / aspect_ratio
+    
+    horizontal_pixels_per_degree = image_width / horizontal_fov_degrees
+    vertical_pixels_per_degree = image_height / vertical_fov_degrees
 
-        horizontal_angle_degrees = np.degrees(horizontal_radians)
-        vertical_angle_degrees = np.degrees(vertical_radians)
+    horizontal_pixel_change = -horizontal_angle_degrees * horizontal_pixels_per_degree
+    vertical_pixel_change = -vertical_angle_degrees * vertical_pixels_per_degree
 
-        # For square images (like Aria 1408x1408), both FOVs should be the same
-        if image_width == image_height:
-            horizontal_fov_degrees = video_fov_degrees
-            vertical_fov_degrees = video_fov_degrees
-        else:
-            # For rectangular images, calculate vertical FOV based on aspect ratio
-            aspect_ratio = image_width / image_height
-            horizontal_fov_degrees = video_fov_degrees
-            vertical_fov_degrees = video_fov_degrees / aspect_ratio
-        
-        horizontal_pixels_per_degree = image_width / horizontal_fov_degrees
-        vertical_pixels_per_degree = image_height / vertical_fov_degrees
+    predicted_x = start_pos[0] + horizontal_pixel_change
+    predicted_y = start_pos[1] + vertical_pixel_change
 
-        horizontal_pixel_change = -horizontal_angle_degrees * horizontal_pixels_per_degree
-        vertical_pixel_change = -vertical_angle_degrees * vertical_pixels_per_degree
-
-        predicted_x = start_pos[0] + horizontal_pixel_change
-        predicted_y = start_pos[1] + vertical_pixel_change
-
-        return (predicted_x, predicted_y)
+    return (predicted_x, predicted_y)
