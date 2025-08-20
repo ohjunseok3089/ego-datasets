@@ -167,47 +167,47 @@ def calculate_head_movement(prev_red_pos, curr_red_pos, image_width, image_heigh
     # Check if this is Aria RGB camera (1408x1408)
     is_aria_rgb = (image_width == 1408 and image_height == 1408)
     
-    if is_aria_rgb:
-        # Use Aria's spherical model
-        print("Detected Aria RGB camera - using spherical model")
+    # if is_aria_rgb:
+    #     # Use Aria's spherical model
+    #     print("Detected Aria RGB camera - using spherical model")
         
-        # Estimate intrinsic parameters from FOV
-        intrinsics = estimate_aria_intrinsics_from_fov(image_width, image_height, fov_degrees=110.0)
+    #     # Estimate intrinsic parameters from FOV
+    #     intrinsics = estimate_aria_intrinsics_from_fov(image_width, image_height, fov_degrees=110.0)
         
-        print(f"Estimated Aria intrinsics: fx={intrinsics['fx']:.1f}, fy={intrinsics['fy']:.1f}, cx={intrinsics['cx']:.1f}, cy={intrinsics['cy']:.1f}")
+    #     print(f"Estimated Aria intrinsics: fx={intrinsics['fx']:.1f}, fy={intrinsics['fy']:.1f}, cx={intrinsics['cx']:.1f}, cy={intrinsics['cy']:.1f}")
         
-        # Use spherical model for calculation
-        return calculate_head_movement_spherical_model(
-            prev_red_pos, curr_red_pos,
-            intrinsics["fx"], intrinsics["fy"], 
-            intrinsics["cx"], intrinsics["cy"]
-        )
-    else:
+    #     # Use spherical model for calculation
+    #     return calculate_head_movement_spherical_model(
+    #         prev_red_pos, curr_red_pos,
+    #         intrinsics["fx"], intrinsics["fy"], 
+    #         intrinsics["cx"], intrinsics["cy"]
+    #     )
+    # else:
         # Use linear method for other cameras
-        horizontal_pixel_change = curr_red_pos[0] - prev_red_pos[0]
-        vertical_pixel_change = curr_red_pos[1] - prev_red_pos[1]
-        
-        aspect_ratio = image_width / image_height
-        vertical_fov_degrees = video_fov_degrees / aspect_ratio
-        
-        horizontal_pixels_per_degree = image_width / video_fov_degrees
-        horizontal_angle_degrees = -horizontal_pixel_change / horizontal_pixels_per_degree
-        horizontal_radians = np.radians(horizontal_angle_degrees)
-        
-        vertical_pixels_per_degree = image_height / vertical_fov_degrees
-        vertical_angle_degrees = -vertical_pixel_change / vertical_pixels_per_degree
-        vertical_radians = np.radians(vertical_angle_degrees)
-        
-        return {
-            "horizontal": {
-                "radians": horizontal_radians,
-                "degrees": horizontal_angle_degrees
-            },
-            "vertical": {
-                "radians": vertical_radians,
-                "degrees": vertical_angle_degrees
-            }
+    horizontal_pixel_change = curr_red_pos[0] - prev_red_pos[0]
+    vertical_pixel_change = curr_red_pos[1] - prev_red_pos[1]
+    
+    aspect_ratio = image_width / image_height
+    vertical_fov_degrees = video_fov_degrees / aspect_ratio
+    
+    horizontal_pixels_per_degree = image_width / video_fov_degrees
+    horizontal_angle_degrees = -horizontal_pixel_change / horizontal_pixels_per_degree
+    horizontal_radians = np.radians(horizontal_angle_degrees)
+    
+    vertical_pixels_per_degree = image_height / vertical_fov_degrees
+    vertical_angle_degrees = -vertical_pixel_change / vertical_pixels_per_degree
+    vertical_radians = np.radians(vertical_angle_degrees)
+    
+    return {
+        "horizontal": {
+            "radians": horizontal_radians,
+            "degrees": horizontal_angle_degrees
+        },
+        "vertical": {
+            "radians": vertical_radians,
+            "degrees": vertical_angle_degrees
         }
+    }
 
 def remap_position_from_movement_spherical(
     start_pos: Tuple[float, float],
