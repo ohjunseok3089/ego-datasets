@@ -262,10 +262,19 @@ def _parse_int_like(value):
 
 
 def _normalize_id_columns(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    
     df = df.copy()
     for col in ['person_id', 'speaker_id']:
-        if col in df.columns:
-            df[f'{col}_num'] = df[col].apply(_parse_int_like)
+        if col in df.columns and not df[col].empty:
+            try:
+                df[f'{col}_num'] = df[col].apply(_parse_int_like)
+            except ValueError as e:
+                # Handle NaN conversion issues
+                print(f"Warning: Failed to normalize {col} column: {e}")
+                # Create column with None values for the same length
+                df[f'{col}_num'] = [None] * len(df)
     return df
 
 
@@ -441,7 +450,9 @@ def process_video(video_path=None, base_video=None, face_csv=None, body_csv=None
                 transcriptions_df = pd.read_csv(paths_info['transcriptions_csv_path'], error_bad_lines=False, warn_bad_lines=True)
         
         head_tracking_df = pd.read_csv(paths_info['head_tracking_csv_path'])
+        print(f"Loaded head tracking CSV: {len(head_tracking_df)} rows")
         head_tracking_df = _standardize_columns(head_tracking_df)
+        print(f"Head tracking columns: {list(head_tracking_df.columns)}")
     except FileNotFoundError as e:
         print(f"Error: A required file was not found. {e}", file=sys.stderr)
         sys.exit(1)
@@ -451,6 +462,7 @@ def process_video(video_path=None, base_video=None, face_csv=None, body_csv=None
     if paths_info.get('body_detection_csv_path') and os.path.isfile(paths_info['body_detection_csv_path']):
         try:
             body_df = pd.read_csv(paths_info['body_detection_csv_path'])
+            print(f"Loaded body detection CSV: {len(body_df)} rows")
         except Exception as e:
             print(f"Warning: Failed to read body detections: {e}")
             body_df = None
@@ -471,8 +483,10 @@ def process_video(video_path=None, base_video=None, face_csv=None, body_csv=None
             body_df = body_df[(body_df['frame_number'] >= start_f) & (body_df['frame_number'] <= end_f)]
 
     # Normalize id columns to numeric forms
+    print("Normalizing head tracking ID columns...")
     head_tracking_df = _normalize_id_columns(head_tracking_df)
     if body_df is not None:
+        print("Normalizing body detection ID columns...")
         body_df = _normalize_id_columns(body_df)
 
     if set(['frame_number', 'person_id_num']).issubset(head_tracking_df.columns):
