@@ -478,9 +478,12 @@ def process_video(video_path=None, base_video=None, face_csv=None, body_csv=None
         else:
             global_frame_index = int(current_frame_index)
         # Base per-frame output (clone of relevant angular fields)
+        # Calculate correct timestamp based on FPS
+        correct_timestamp = round(current_frame_index / fps_read, 3)
+        
         out_frame = {
             'frame_index': frame_obj.get('frame_index'),
-            'timestamp': frame_obj.get('timestamp'),
+            'timestamp': correct_timestamp,
             'social_category': frame_obj.get('social_category'),
             'red_circle': frame_obj.get('red_circle'),
             'head_movement': frame_obj.get('head_movement'),
