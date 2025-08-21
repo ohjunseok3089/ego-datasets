@@ -75,8 +75,8 @@ echo "$video_files" | while read -r video_file; do
     base_name=$(echo "$video_name" | sed 's/(.*//')
     
     # Define expected file paths for EGO4D
-    face_csv="$FACE_DETECTION_DIR/${base_name}_global_gallery_with_speaker.csv"
-    body_csv="$BODY_DETECTION_DIR/${base_name}_detections_with_speaker.csv"
+    face_csv="$FACE_DETECTION_DIR/${base_name}.csv"
+    body_csv="$BODY_DETECTION_DIR/${base_name}_detections.csv"
     co_tracker_json="$CO_TRACKER_DIR/${video_name}_analysis.json"
     
     # Check if required files exist
