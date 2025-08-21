@@ -56,6 +56,7 @@ total_videos=$(echo "$video_files" | wc -l)
 processed=0
 successful=0
 failed=0
+total_frames_processed=0
 
 # Process each video file
 echo "$video_files" | while read -r video_file; do
@@ -105,19 +106,29 @@ echo "$video_files" | while read -r video_file; do
     echo "    Transcript CSV: $TRANSCRIPT_CSV"
     echo ""
     
-    # Run join_ground_truth.py
+    # Run join_ground_truth.py and capture frame count
     echo "  Running join_ground_truth.py..."
-    if python join_ground_truth.py \
+    output=$(python join_ground_truth.py \
         --base_video "$video_file" \
         --face_csv "$face_csv" \
         --body_csv "$body_csv" \
         --co_tracker_json "$co_tracker_json" \
         --transcript_csv "$TRANSCRIPT_CSV" \
-        --fps "$FPS"; then
+        --fps "$FPS" 2>&1)
+    
+    if [ $? -eq 0 ]; then
         echo -e "${GREEN}  ✓ Successfully processed $video_filename${NC}"
         successful=$((successful + 1))
+        
+        # Extract frame count from output
+        frame_count=$(echo "$output" | grep "Total frames processed:" | sed 's/.*Total frames processed: //')
+        if [[ "$frame_count" =~ ^[0-9]+$ ]]; then
+            total_frames_processed=$((total_frames_processed + frame_count))
+            echo "  Frames processed: $frame_count"
+        fi
     else
         echo -e "${RED}  ✗ Failed to process $video_filename${NC}"
+        echo "$output"
         failed=$((failed + 1))
     fi
     
@@ -129,9 +140,11 @@ echo -e "${GREEN}=== Batch Processing Summary ===${NC}"
 echo "Total videos found: $total_videos"
 echo "Successfully processed: $successful"
 echo "Failed: $failed"
+echo "Total frames processed across all videos: $total_frames_processed"
 
 if [ $failed -eq 0 ]; then
     echo -e "${GREEN}All videos processed successfully!${NC}"
+    echo -e "${GREEN}Grand total: $total_frames_processed frames processed${NC}"
     exit 0
 else
     echo -e "${YELLOW}Some videos failed to process. Check the logs above for details.${NC}"

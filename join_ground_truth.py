@@ -123,7 +123,9 @@ def derive_paths_from_args(base_video: str, face_csv: str, body_csv: str, co_tra
             candidate_root = os.path.dirname(os.path.dirname(co_tracker_json)) if co_tracker_json else os.getcwd()
         output_dir = os.path.join(candidate_root, 'joined_ground_truth')
         os.makedirs(output_dir, exist_ok=True)
-        output_json = os.path.join(output_dir, f"{video_basename}.json")
+        # Remove file extension if present
+        clean_basename = os.path.splitext(video_basename)[0]
+        output_json = os.path.join(output_dir, f"{clean_basename}.json")
 
     return {
         'angular_json_path': co_tracker_json,
@@ -443,7 +445,7 @@ def process_video(video_path=None, base_video=None, face_csv=None, body_csv=None
         body_df = _normalize_id_columns(body_df)
 
     if set(['frame_number', 'person_id_num']).issubset(head_tracking_df.columns):
-        head_tracking_multiindex = head_tracking_df.set_index(['frame_number', 'person_id_num'])
+        head_tracking_multiindex = head_tracking_df.set_index(['frame_number', 'person_id_num']).sort_index()
     else:
         head_tracking_multiindex = head_tracking_df  # fallback without MultiIndex
 
@@ -463,6 +465,7 @@ def process_video(video_path=None, base_video=None, face_csv=None, body_csv=None
     total_frames = len(angular_data['frames'])
     joined_frames = []
     missing_debug_reported = 0
+    processed_frame_count = 0
     for i, frame_obj in enumerate(angular_data['frames']):
         if (i + 1) % 100 == 0 or i == total_frames - 1:
             print(f"  Processing frame {i+1}/{total_frames}...")
@@ -530,6 +533,7 @@ def process_video(video_path=None, base_video=None, face_csv=None, body_csv=None
                 missing_debug_reported += 1
 
         joined_frames.append(out_frame)
+        processed_frame_count += 1
 
     # Build joined output structure
     metadata = angular_data.get('metadata', {}).copy()
@@ -554,6 +558,7 @@ def process_video(video_path=None, base_video=None, face_csv=None, body_csv=None
 
     output_path = paths_info['output_joined_json_path']
     print(f"\nProcessing complete. Saving joined ground truth to {output_path}")
+    print(f"Total frames processed: {processed_frame_count}")
     try:
         with open(output_path, 'w') as f:
             json.dump(output_joined, f, indent=2)
@@ -562,6 +567,7 @@ def process_video(video_path=None, base_video=None, face_csv=None, body_csv=None
         sys.exit(1)
 
     print("Successfully finished.")
+    return processed_frame_count
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
