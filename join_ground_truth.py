@@ -412,7 +412,20 @@ def process_video(video_path=None, base_video=None, face_csv=None, body_csv=None
     try:
         with open(paths_info['angular_json_path'], 'r') as f:
             angular_data = json.load(f)
-        transcriptions_df = pd.read_csv(paths_info['transcriptions_csv_path'])
+        
+        # Read transcriptions CSV with error handling for malformed lines
+        try:
+            transcriptions_df = pd.read_csv(paths_info['transcriptions_csv_path'])
+        except pd.errors.ParserError as e:
+            print(f"Warning: CSV parsing error in transcriptions file: {e}")
+            print("Attempting to read with on_bad_lines='skip'...")
+            try:
+                transcriptions_df = pd.read_csv(paths_info['transcriptions_csv_path'], on_bad_lines='skip')
+            except TypeError:
+                # Fallback for older pandas versions
+                print("Trying with error_bad_lines=False for older pandas...")
+                transcriptions_df = pd.read_csv(paths_info['transcriptions_csv_path'], error_bad_lines=False, warn_bad_lines=True)
+        
         head_tracking_df = pd.read_csv(paths_info['head_tracking_csv_path'])
         head_tracking_df = _standardize_columns(head_tracking_df)
     except FileNotFoundError as e:
