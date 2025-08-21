@@ -40,7 +40,7 @@ fi
 
 # Find all MP4 video files in parts
 # video_files=$(find "$PARTS_DIR" -maxdepth 1 -type f -name "vid_*.MP4" | sort)
-video_files=$(find "$PARTS_DIR" -maxdepth 1 -type f -name "vid_*.mp4" | sort)
+video_files=$(find "$PARTS_DIR" -maxdepth 1 -type f -name "*.mp4" | sort)
 
 if [ -z "$video_files" ]; then
     echo -e "${RED}Error: No MP4 video files found in $PARTS_DIR${NC}"
