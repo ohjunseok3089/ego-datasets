@@ -6,12 +6,13 @@
 set -e
 
 # Configuration
-EGOCOM_ROOT="/mas/robots/prg-egocom/EGOCOM"
-PARTS_DIR="$EGOCOM_ROOT/parts"
-FACE_DETECTION_DIR="$EGOCOM_ROOT/face_detection"
-BODY_DETECTION_DIR="$EGOCOM_ROOT/body_detection"
-CO_TRACKER_DIR="$EGOCOM_ROOT/co-tracker-ground-truth"
-TRANSCRIPT_CSV="$EGOCOM_ROOT/transcript/ground_truth_transcriptions_with_frames.csv"
+# EGOCOM_ROOT="/mas/robots/prg-egocom/EGOCOM"
+EGO4D_ROOT="/mas/robots/prg-ego4d"
+PARTS_DIR="$EGO4D_ROOT/parts"
+FACE_DETECTION_DIR="$EGO4D_ROOT/face_detection"
+BODY_DETECTION_DIR="$EGO4D_ROOT/body_detection"
+CO_TRACKER_DIR="$EGO4D_ROOT/co-tracker-ground-truth"
+TRANSCRIPT_CSV="$EGO4D_ROOT/transcript/ground_truth_transcriptions_with_frames.csv"
 FPS=30
 
 # Colors for output
@@ -21,7 +22,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 echo -e "${GREEN}Starting batch processing of join_ground_truth.py${NC}"
-echo "EGOCOM Root: $EGOCOM_ROOT"
+echo "EGO4D Root: $EGO4D_ROOT"
 echo "Parts Directory: $PARTS_DIR"
 echo "Transcript CSV: $TRANSCRIPT_CSV"
 echo ""
