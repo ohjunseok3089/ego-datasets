@@ -1,17 +1,17 @@
 #!/bin/bash
 
-# Batch script to run join_ground_truth.py for all videos in EGOCOM/parts directory
-# Usage: ./run_join_ground_truth_batch.sh
+# Batch script to run join_ground_truth.py for all EGO4D videos in parts directory
+# Usage: ./run_join_ground_truth_batch_ego4d.sh
 
 set -e
 
 # Configuration
-EGOCOM_ROOT="/mas/robots/prg-egocom/EGOCOM"
-PARTS_DIR="$EGOCOM_ROOT/parts"
-FACE_DETECTION_DIR="$EGOCOM_ROOT/face_detection"
-BODY_DETECTION_DIR="$EGOCOM_ROOT/body_detection"
-CO_TRACKER_DIR="$EGOCOM_ROOT/co-tracker-ground-truth"
-TRANSCRIPT_CSV="$EGOCOM_ROOT/transcript/ground_truth_transcriptions_with_frames.csv"
+EGO4D_ROOT="/mas/robots/prg-ego4d"
+PARTS_DIR="$EGO4D_ROOT/parts"
+FACE_DETECTION_DIR="$EGO4D_ROOT/face_detection"
+BODY_DETECTION_DIR="$EGO4D_ROOT/body_detection"
+CO_TRACKER_DIR="$EGO4D_ROOT/co-tracker-ground-truth"
+TRANSCRIPT_CSV="$EGO4D_ROOT/transcript/ground_truth_transcriptions_with_frames.csv"
 FPS=30
 
 # Colors for output
@@ -20,8 +20,8 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-echo -e "${GREEN}Starting batch processing of join_ground_truth.py${NC}"
-echo "EGOCOM Root: $EGOCOM_ROOT"
+echo -e "${GREEN}Starting batch processing of join_ground_truth.py for EGO4D${NC}"
+echo "EGO4D Root: $EGO4D_ROOT"
 echo "Parts Directory: $PARTS_DIR"
 echo "Transcript CSV: $TRANSCRIPT_CSV"
 echo ""
@@ -37,11 +37,11 @@ if [ ! -f "$TRANSCRIPT_CSV" ]; then
     exit 1
 fi
 
-# Find all MP4 video files in parts
-video_files=$(find "$PARTS_DIR" -maxdepth 1 -type f -name "vid_*.MP4" | sort)
+# Find all mp4 video files in parts (lowercase .mp4 for EGO4D)
+video_files=$(find "$PARTS_DIR" -maxdepth 1 -type f -name "*.mp4" | sort)
 
 if [ -z "$video_files" ]; then
-    echo -e "${RED}Error: No MP4 video files found in $PARTS_DIR${NC}"
+    echo -e "${RED}Error: No mp4 video files found in $PARTS_DIR${NC}"
     exit 1
 fi
 
@@ -66,15 +66,15 @@ echo "$video_files" | while read -r video_file; do
     
     processed=$((processed + 1))
     video_filename=$(basename "$video_file")
-    video_name="${video_filename%.MP4}"  # Remove .MP4 extension
+    video_name="${video_filename%.mp4}"  # Remove .mp4 extension
     
     echo -e "${YELLOW}[$processed/$total_videos] Processing: $video_filename${NC}"
     
-    # Extract base name without the parentheses part for file matching
-    # e.g., vid_001__day_1__con_1__person_1_part1(0_1920_social_interaction) -> vid_001__day_1__con_1__person_1_part1
+    # For EGO4D, the UUID is the base name
+    # e.g., 30294c41-c90d-438a-af19-c1c74787d06b(1950_111360_collaborative_task) -> 30294c41-c90d-438a-af19-c1c74787d06b
     base_name=$(echo "$video_name" | sed 's/(.*//')
     
-    # Define expected file paths
+    # Define expected file paths for EGO4D
     face_csv="$FACE_DETECTION_DIR/${base_name}_global_gallery_with_speaker.csv"
     body_csv="$BODY_DETECTION_DIR/${base_name}_detections_with_speaker.csv"
     co_tracker_json="$CO_TRACKER_DIR/${video_name}_analysis.json"
@@ -136,14 +136,14 @@ echo "$video_files" | while read -r video_file; do
 done
 
 # Print summary
-echo -e "${GREEN}=== Batch Processing Summary ===${NC}"
+echo -e "${GREEN}=== EGO4D Batch Processing Summary ===${NC}"
 echo "Total videos found: $total_videos"
 echo "Successfully processed: $successful"
 echo "Failed: $failed"
 echo "Total frames processed across all videos: $total_frames_processed"
 
 if [ $failed -eq 0 ]; then
-    echo -e "${GREEN}All videos processed successfully!${NC}"
+    echo -e "${GREEN}All EGO4D videos processed successfully!${NC}"
     echo -e "${GREEN}Grand total: $total_frames_processed frames processed${NC}"
     exit 0
 else
