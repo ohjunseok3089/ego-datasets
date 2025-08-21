@@ -244,6 +244,13 @@ def _parse_int_like(value):
         except Exception:
             return None
     if isinstance(value, str):
+        # First try to parse as float then convert to int (handles "1.0" -> 1)
+        try:
+            float_val = float(value)
+            return int(float_val)
+        except Exception:
+            pass
+        # Fallback: extract integer from string
         m = re.search(r'-?\d+', value)
         if m:
             try:
@@ -309,17 +316,24 @@ def _group_body_detections_by_frame(body_df: pd.DataFrame):
                 'x2': float(row['x2']),
                 'y2': float(row['y2']),
             }
+            # Handle class_name -> speaker_id conversion and parse as integer
+            speaker_id_val = None
             if 'class_name' in row:
-                det['class_name'] = str(row['class_name'])
+                # Convert class_name (e.g., "1.0") to integer speaker_id
+                speaker_id_val = _parse_int_like(row.get('class_name'))
+            if 'speaker_id' in row:
+                speaker_id_val = _parse_int_like(row.get('speaker_id'))
+            if 'speaker_id_num' in row:
+                speaker_id_val = _parse_int_like(row.get('speaker_id_num'))
+            
+            if speaker_id_val is not None:
+                det['speaker_id'] = speaker_id_val
+            
             if 'confidence' in row:
                 try:
                     det['confidence'] = float(row['confidence'])
                 except Exception:
                     det['confidence'] = None
-            if 'speaker_id' in row:
-                det['speaker_id'] = _parse_int_like(row.get('speaker_id'))
-            if 'speaker_id_num' in row:
-                det['speaker_id'] = _parse_int_like(row.get('speaker_id_num'))
             detections.append(det)
         bodies_by_frame[int(frame_number)] = detections
     return bodies_by_frame
