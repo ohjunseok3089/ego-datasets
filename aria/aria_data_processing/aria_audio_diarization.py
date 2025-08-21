@@ -25,6 +25,10 @@ from typing import Dict, List, Tuple, Optional
 import json
 import csv
 import math
+import librosa
+from scipy import signal
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
 
 try:
     from pyannote.audio import Pipeline
@@ -105,6 +109,184 @@ class AriaSpeakerDiarization:
 
         # Generate consecutive frames [start_frame, ..., end_frame_inclusive]
         return list(range(start_frame, end_frame_inclusive + 1))
+    
+    def extract_voice_features(self, audio_path: str, start_time: float, end_time: float) -> Dict:
+        """
+        Extract voice characteristics (pitch, tone, timbre) from audio segment
+        
+        Args:
+            audio_path: Path to audio file
+            start_time: Start time in seconds
+            end_time: End time in seconds
+            
+        Returns:
+            Dictionary of voice features
+        """
+        try:
+            # Load audio segment
+            y, sr = librosa.load(audio_path, sr=16000, offset=start_time, duration=end_time-start_time)
+            
+            if len(y) < 100:  # Too short segment
+                return None
+            
+            # Extract features
+            features = {}
+            
+            # 1. Pitch (F0) features
+            pitches, magnitudes = librosa.piptrack(y=y, sr=sr, threshold=0.1)
+            pitch_values = []
+            for t in range(pitches.shape[1]):
+                index = magnitudes[:, t].argmax()
+                pitch = pitches[index, t]
+                if pitch > 0:
+                    pitch_values.append(pitch)
+            
+            if pitch_values:
+                features['pitch_mean'] = np.mean(pitch_values)
+                features['pitch_std'] = np.std(pitch_values)
+                features['pitch_range'] = np.max(pitch_values) - np.min(pitch_values)
+            else:
+                features['pitch_mean'] = 0
+                features['pitch_std'] = 0
+                features['pitch_range'] = 0
+            
+            # 2. Spectral features (timbre)
+            mfccs = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)
+            features['mfcc_mean'] = np.mean(mfccs, axis=1)
+            features['mfcc_std'] = np.std(mfccs, axis=1)
+            
+            # 3. Spectral centroid (brightness)
+            spectral_centroids = librosa.feature.spectral_centroid(y=y, sr=sr)[0]
+            features['spectral_centroid_mean'] = np.mean(spectral_centroids)
+            features['spectral_centroid_std'] = np.std(spectral_centroids)
+            
+            # 4. Zero crossing rate (voice texture)
+            zcr = librosa.feature.zero_crossing_rate(y)[0]
+            features['zcr_mean'] = np.mean(zcr)
+            features['zcr_std'] = np.std(zcr)
+            
+            # 5. RMS energy (loudness)
+            rms = librosa.feature.rms(y=y)[0]
+            features['rms_mean'] = np.mean(rms)
+            features['rms_std'] = np.std(rms)
+            
+            return features
+            
+        except Exception as e:
+            logger.warning(f"Failed to extract voice features: {e}")
+            return None
+    
+    def cluster_speakers_by_voice(self, df: pd.DataFrame, audio_path: str) -> pd.DataFrame:
+        """
+        Cluster speakers based on voice characteristics instead of time gaps
+        
+        Args:
+            df: DataFrame with speech segments and normalized timestamps
+            audio_path: Path to audio file for feature extraction
+            
+        Returns:
+            DataFrame with improved speaker labels based on voice clustering
+        """
+        logger.info("Clustering speakers based on voice characteristics...")
+        
+        if len(df) <= 1:
+            df['speaker_label'] = 'person_1'
+            return df
+        
+        # Extract features for each segment
+        features_list = []
+        valid_indices = []
+        
+        for idx, row in df.iterrows():
+            features = self.extract_voice_features(
+                audio_path, 
+                row['start_sec_normalized'], 
+                row['end_sec_normalized']
+            )
+            
+            if features is not None:
+                # Flatten MFCC features
+                feature_vector = [
+                    features['pitch_mean'],
+                    features['pitch_std'], 
+                    features['pitch_range'],
+                    features['spectral_centroid_mean'],
+                    features['spectral_centroid_std'],
+                    features['zcr_mean'],
+                    features['zcr_std'],
+                    features['rms_mean'],
+                    features['rms_std']
+                ]
+                # Add MFCC means and stds
+                feature_vector.extend(features['mfcc_mean'])
+                feature_vector.extend(features['mfcc_std'])
+                
+                features_list.append(feature_vector)
+                valid_indices.append(idx)
+        
+        if len(features_list) < 2:
+            logger.warning("Not enough valid voice features for clustering, using fallback")
+            return self._improved_fallback_speaker_assignment(df)
+        
+        # Normalize features
+        scaler = StandardScaler()
+        features_normalized = scaler.fit_transform(features_list)
+        
+        # Determine optimal number of clusters (speakers)
+        max_clusters = min(4, len(features_list))  # Max 4 speakers
+        best_score = -1
+        best_n_clusters = 2
+        
+        for n_clusters in range(2, max_clusters + 1):
+            kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+            cluster_labels = kmeans.fit_predict(features_normalized)
+            
+            # Use silhouette score to evaluate clustering quality
+            try:
+                from sklearn.metrics import silhouette_score
+                score = silhouette_score(features_normalized, cluster_labels)
+                if score > best_score:
+                    best_score = score
+                    best_n_clusters = n_clusters
+            except:
+                # Fallback if silhouette_score not available
+                best_n_clusters = 2
+                break
+        
+        # Final clustering with best number of clusters
+        kmeans = KMeans(n_clusters=best_n_clusters, random_state=42, n_init=10)
+        cluster_labels = kmeans.fit_predict(features_normalized)
+        
+        # Assign speaker labels
+        df['speaker_label'] = 'person_unknown'
+        for i, idx in enumerate(valid_indices):
+            speaker_num = cluster_labels[i] + 1  # Start from person_1
+            df.at[idx, 'speaker_label'] = f'person_{speaker_num}'
+        
+        # For segments without valid features, assign based on nearest neighbor
+        for idx, row in df.iterrows():
+            if df.at[idx, 'speaker_label'] == 'person_unknown':
+                # Find closest segment with valid label
+                closest_idx = None
+                min_time_diff = float('inf')
+                
+                for valid_idx in valid_indices:
+                    time_diff = abs(row['start_sec_normalized'] - df.at[valid_idx, 'start_sec_normalized'])
+                    if time_diff < min_time_diff:
+                        min_time_diff = time_diff
+                        closest_idx = valid_idx
+                
+                if closest_idx is not None:
+                    df.at[idx, 'speaker_label'] = df.at[closest_idx, 'speaker_label']
+                else:
+                    df.at[idx, 'speaker_label'] = 'person_1'
+        
+        # Log clustering results
+        speaker_counts = df['speaker_label'].value_counts()
+        logger.info(f"Voice-based clustering result: {dict(speaker_counts)}")
+        logger.info(f"Clustering quality score: {best_score:.3f}")
+        
+        return df
     
     def load_speech_csv(self, csv_path: str) -> pd.DataFrame:
         """
@@ -225,47 +407,59 @@ class AriaSpeakerDiarization:
             logger.error(f"Error during diarization: {e}")
             return None
     
-    def assign_speakers_to_segments(self, df: pd.DataFrame, diarization: Optional[Annotation]) -> pd.DataFrame:
+    def assign_speakers_to_segments(self, df: pd.DataFrame, diarization: Optional[Annotation], audio_path: str = None) -> pd.DataFrame:
         """
-        Assign speaker labels to speech segments using normalized timestamps
+        Assign speaker labels using voice-based clustering as primary method
         
         Args:
             df: DataFrame with speech segments (with normalized timestamps)
-            diarization: Pyannote diarization results
+            diarization: Pyannote diarization results (optional)
+            audio_path: Path to audio file for voice feature extraction
             
         Returns:
             DataFrame with speaker_label column added
         """
-        if diarization is None:
-            # Fallback: assign speakers based on improved heuristics
-            return self._improved_fallback_speaker_assignment(df)
+        # Primary method: Voice-based clustering
+        if audio_path and os.path.exists(audio_path):
+            logger.info("Using voice-based speaker clustering (primary method)")
+            try:
+                return self.cluster_speakers_by_voice(df, audio_path)
+            except Exception as e:
+                logger.warning(f"Voice-based clustering failed: {e}, falling back to other methods")
         
-        # Create speaker_label column
-        df['speaker_label'] = 'unknown'
+        # Secondary method: Pyannote diarization
+        if diarization is not None:
+            logger.info("Using pyannote diarization (secondary method)")
+            # Create speaker_label column
+            df['speaker_label'] = 'unknown'
+            
+            for idx, row in df.iterrows():
+                # Use normalized timestamps for diarization
+                start_time = row['start_sec_normalized']
+                end_time = row['end_sec_normalized']
+                
+                # Find overlapping speakers in diarization
+                segment = Segment(start_time, end_time)
+                speakers = []
+                
+                for speech_segment, _, speaker in diarization.itertracks(yield_label=True):
+                    if segment.overlaps(speech_segment):
+                        overlap_duration = segment & speech_segment
+                        if overlap_duration.duration > 0.05:  # Reduced threshold to 50ms
+                            speakers.append((speaker, overlap_duration.duration))
+                
+                if speakers:
+                    # Assign speaker with longest overlap
+                    best_speaker = max(speakers, key=lambda x: x[1])[0]
+                    df.at[idx, 'speaker_label'] = best_speaker
+                else:
+                    df.at[idx, 'speaker_label'] = 'person_unknown'
+            
+            return df
         
-        for idx, row in df.iterrows():
-            # Use normalized timestamps for diarization
-            start_time = row['start_sec_normalized']
-            end_time = row['end_sec_normalized']
-            
-            # Find overlapping speakers in diarization
-            segment = Segment(start_time, end_time)
-            speakers = []
-            
-            for speech_segment, _, speaker in diarization.itertracks(yield_label=True):
-                if segment.overlaps(speech_segment):
-                    overlap_duration = segment & speech_segment
-                    if overlap_duration.duration > 0.05:  # Reduced threshold to 50ms
-                        speakers.append((speaker, overlap_duration.duration))
-            
-            if speakers:
-                # Assign speaker with longest overlap
-                best_speaker = max(speakers, key=lambda x: x[1])[0]
-                df.at[idx, 'speaker_label'] = best_speaker
-            else:
-                df.at[idx, 'speaker_label'] = 'person_unknown'
-        
-        return df
+        # Tertiary method: Improved heuristics
+        logger.info("Using improved heuristics (tertiary method)")
+        return self._improved_fallback_speaker_assignment(df)
     
     def _improved_fallback_speaker_assignment(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -475,18 +669,24 @@ class AriaSpeakerDiarization:
         if df is None:
             return False
         
-        # Extract audio for diarization
+        # Extract audio for diarization and voice analysis
         diarization = None
-        if self.pipeline:
-            if self.extract_audio_for_diarization(recording_dir, temp_audio_path):
-                diarization = self.perform_diarization(temp_audio_path)
-                
-                # Clean up temporary audio file
-                if os.path.exists(temp_audio_path):
-                    os.remove(temp_audio_path)
+        audio_extracted = False
         
-        # Assign speakers
-        df_with_speakers = self.assign_speakers_to_segments(df, diarization)
+        if self.extract_audio_for_diarization(recording_dir, temp_audio_path):
+            audio_extracted = True
+            
+            # Run pyannote diarization if available
+            if self.pipeline:
+                diarization = self.perform_diarization(temp_audio_path)
+        
+        # Assign speakers using voice-based clustering (uses temp_audio_path)
+        audio_path_for_clustering = temp_audio_path if audio_extracted else None
+        df_with_speakers = self.assign_speakers_to_segments(df, diarization, audio_path_for_clustering)
+        
+        # Clean up temporary audio file after voice analysis
+        if audio_extracted and os.path.exists(temp_audio_path):
+            os.remove(temp_audio_path)
         
         # Save updated CSV
         self.save_updated_csv(df_with_speakers, output_csv_path)
