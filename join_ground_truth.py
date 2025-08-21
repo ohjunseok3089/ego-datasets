@@ -390,17 +390,21 @@ def process_video(video_path=None, base_video=None, face_csv=None, body_csv=None
     img_width = img_height = None
     fps_read = fps or FPS
     frame_count = 0
-    if video_path and os.path.isfile(video_path):
-        print("\nReading video properties...")
-        cap = cv2.VideoCapture(video_path)
+    
+    # Determine the actual video file path to read properties from
+    actual_video_path = video_path or paths_info.get('base_video_path')
+    if actual_video_path and os.path.isfile(actual_video_path):
+        print(f"\nReading video properties from: {actual_video_path}")
+        cap = cv2.VideoCapture(actual_video_path)
         if not cap.isOpened():
-            print(f"Warning: Could not open video file to read properties: {video_path}")
+            print(f"Warning: Could not open video file to read properties: {actual_video_path}")
         else:
             img_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             img_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             fps_read = cap.get(cv2.CAP_PROP_FPS) or FPS
             frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
             cap.release()
+            print(f"Detected FPS: {fps_read}")
             if img_width and img_height:
                 print(f"Detected video dimensions: {img_width}x{img_height}")
 
@@ -480,6 +484,11 @@ def process_video(video_path=None, base_video=None, face_csv=None, body_csv=None
         # Base per-frame output (clone of relevant angular fields)
         # Calculate correct timestamp based on FPS
         correct_timestamp = round(current_frame_index / fps_read, 3)
+        
+        # Debug: print first few timestamp calculations
+        if debug and i < 5:
+            original_timestamp = frame_obj.get('timestamp')
+            print(f"[DEBUG] Frame {current_frame_index}: original_timestamp={original_timestamp}, corrected_timestamp={correct_timestamp}, fps_read={fps_read}")
         
         out_frame = {
             'frame_index': frame_obj.get('frame_index'),
