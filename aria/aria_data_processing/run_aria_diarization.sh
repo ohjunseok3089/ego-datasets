@@ -74,6 +74,7 @@ echo -e "Transcript directory: $TRANSCRIPT_DIR"
 python3 "${SCRIPT_DIR}/aria_audio_diarization.py" \
     --input_dir "$ARIA_RAW_DIR" \
     --output_dir "$OUTPUT_DIR" \
+    --debug \
     $AUTH_TOKEN_ARG
 
 echo -e "${GREEN}=== Diarization Complete ===${NC}"
@@ -98,6 +99,7 @@ process_single() {
     python3 "${SCRIPT_DIR}/aria_audio_diarization.py" \
         --single_recording "$SINGLE_DIR" \
         --output_dir "$OUTPUT_DIR" \
+        --debug \
         $AUTH_TOKEN_ARG
 }
 

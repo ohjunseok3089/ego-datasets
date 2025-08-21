@@ -82,7 +82,7 @@ class AriaSpeakerDiarization:
         """Convert seconds to nanoseconds"""
         return int(s * 1_000_000_000)
     
-    def compute_frame_range(self, start_time_s: float, end_time_s: float = None, fps: float = 30.0):
+    def compute_frame_range(self, start_time_s: float, end_time_s: float = None, fps: float = 20.0):
         """Compute an inclusive list of frame indices covering [start, end).
         
         If `end_time_s` is None or not finite, returns a single-frame list at the
@@ -114,7 +114,7 @@ class AriaSpeakerDiarization:
             csv_path: Path to speech.csv file
             
         Returns:
-            DataFrame with parsed speech data
+            DataFrame with parsed speech data and normalized timestamps
         """
         try:
             df = pd.read_csv(csv_path)
@@ -127,6 +127,15 @@ class AriaSpeakerDiarization:
             # Convert nanoseconds to seconds for processing
             df['start_sec'] = df['startTime_ns'].apply(self.nanoseconds_to_seconds)
             df['end_sec'] = df['endTime_ns'].apply(self.nanoseconds_to_seconds)
+            
+            # Normalize timestamps to start from 0
+            if len(df) > 0:
+                min_start_time = df['start_sec'].min()
+                df['start_sec_normalized'] = df['start_sec'] - min_start_time
+                df['end_sec_normalized'] = df['end_sec'] - min_start_time
+                
+                logger.info(f"Normalized timestamps. Original range: {df['start_sec'].min():.2f}-{df['end_sec'].max():.2f}s")
+                logger.info(f"Normalized range: {df['start_sec_normalized'].min():.2f}-{df['end_sec_normalized'].max():.2f}s")
             
             logger.info(f"Loaded {len(df)} speech segments from {csv_path}")
             return df
@@ -160,8 +169,9 @@ class AriaSpeakerDiarization:
                 "ffmpeg", "-i", vrs_path,
                 "-vn",  # No video
                 "-acodec", "pcm_s16le",  # PCM 16-bit
-                "-ar", "16000",  # 16kHz sample rate
-                "-ac", "1",  # Mono
+                "-ar", "16000",  # 16kHz sample rate (good for speech recognition)
+                "-ac", "1",  # Mono (better for diarization)
+                "-af", "highpass=f=200,lowpass=f=3400",  # Filter for speech frequency range
                 "-y",  # Overwrite output
                 output_audio_path
             ]
@@ -181,7 +191,7 @@ class AriaSpeakerDiarization:
     
     def perform_diarization(self, audio_path: str) -> Optional[Annotation]:
         """
-        Perform speaker diarization on audio file
+        Perform speaker diarization on audio file with optimized parameters
         
         Args:
             audio_path: Path to audio file
@@ -194,9 +204,21 @@ class AriaSpeakerDiarization:
             return None
         
         try:
+            # Configure diarization parameters for better performance
+            if hasattr(self.pipeline, '_segmentation'):
+                # Reduce minimum segment duration for better precision
+                self.pipeline._segmentation.min_duration_on = 0.1
+                self.pipeline._segmentation.min_duration_off = 0.1
+            
             # Load audio and perform diarization
+            logger.info(f"Starting diarization for {audio_path}")
             diarization = self.pipeline(audio_path)
-            logger.info(f"Diarization completed for {audio_path}")
+            
+            # Log diarization results
+            num_speakers = len(diarization.labels())
+            total_duration = sum(segment.duration for segment, _, _ in diarization.itertracks())
+            logger.info(f"Diarization completed: {num_speakers} speakers detected, {total_duration:.2f}s total speech")
+            
             return diarization
             
         except Exception as e:
@@ -205,25 +227,26 @@ class AriaSpeakerDiarization:
     
     def assign_speakers_to_segments(self, df: pd.DataFrame, diarization: Optional[Annotation]) -> pd.DataFrame:
         """
-        Assign speaker labels to speech segments
+        Assign speaker labels to speech segments using normalized timestamps
         
         Args:
-            df: DataFrame with speech segments
+            df: DataFrame with speech segments (with normalized timestamps)
             diarization: Pyannote diarization results
             
         Returns:
             DataFrame with speaker_label column added
         """
         if diarization is None:
-            # Fallback: assign speakers based on simple heuristics
-            return self._fallback_speaker_assignment(df)
+            # Fallback: assign speakers based on improved heuristics
+            return self._improved_fallback_speaker_assignment(df)
         
         # Create speaker_label column
         df['speaker_label'] = 'unknown'
         
         for idx, row in df.iterrows():
-            start_time = row['start_sec']
-            end_time = row['end_sec']
+            # Use normalized timestamps for diarization
+            start_time = row['start_sec_normalized']
+            end_time = row['end_sec_normalized']
             
             # Find overlapping speakers in diarization
             segment = Segment(start_time, end_time)
@@ -232,7 +255,7 @@ class AriaSpeakerDiarization:
             for speech_segment, _, speaker in diarization.itertracks(yield_label=True):
                 if segment.overlaps(speech_segment):
                     overlap_duration = segment & speech_segment
-                    if overlap_duration.duration > 0.1:  # At least 100ms overlap
+                    if overlap_duration.duration > 0.05:  # Reduced threshold to 50ms
                         speakers.append((speaker, overlap_duration.duration))
             
             if speakers:
@@ -240,46 +263,90 @@ class AriaSpeakerDiarization:
                 best_speaker = max(speakers, key=lambda x: x[1])[0]
                 df.at[idx, 'speaker_label'] = best_speaker
             else:
-                df.at[idx, 'speaker_label'] = 'speaker_unknown'
+                df.at[idx, 'speaker_label'] = 'person_unknown'
         
         return df
     
-    def _fallback_speaker_assignment(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _improved_fallback_speaker_assignment(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Fallback speaker assignment using simple heuristics
+        Improved fallback speaker assignment using multiple heuristics
         
         Args:
-            df: DataFrame with speech segments
+            df: DataFrame with speech segments (with normalized timestamps)
             
         Returns:
             DataFrame with speaker_label column added
         """
-        logger.info("Using fallback speaker assignment")
+        logger.info("Using improved fallback speaker assignment")
         
-        # Simple heuristic: assign speakers based on time gaps
-        df['speaker_label'] = 'speaker_A'
+        if len(df) == 0:
+            return df
         
-        if len(df) > 1:
-            # Calculate time gaps between segments
-            df['time_gap'] = df['start_sec'] - df['end_sec'].shift(1)
+        # Initialize speaker labels
+        df['speaker_label'] = 'person_1'
+        
+        if len(df) == 1:
+            return df
+        
+        # Use normalized timestamps
+        df['time_gap'] = df['start_sec_normalized'] - df['end_sec_normalized'].shift(1)
+        df['segment_duration'] = df['end_sec_normalized'] - df['start_sec_normalized']
+        
+        # Analyze text patterns for speaker changes
+        df['text_length'] = df['written'].str.len()
+        df['word_count'] = df['written'].str.split().str.len()
+        
+        current_speaker = 'person_1'
+        speaker_map = {'person_1': 'person_2', 'person_2': 'person_1'}
+        
+        # Parameters for speaker switching
+        GAP_THRESHOLD_SHORT = 1.0    # Short gap threshold
+        GAP_THRESHOLD_LONG = 3.0     # Long gap threshold
+        CONFIDENCE_THRESHOLD = 0.7   # Low confidence might indicate speaker change
+        
+        for idx, row in df.iterrows():
+            if idx == 0:
+                df.at[idx, 'speaker_label'] = current_speaker
+                continue
             
-            current_speaker = 'speaker_A'
-            speaker_map = {'speaker_A': 'speaker_B', 'speaker_B': 'speaker_A'}
+            prev_row = df.iloc[idx - 1]
+            should_switch = False
             
-            for idx, row in df.iterrows():
-                if idx == 0:
-                    df.at[idx, 'speaker_label'] = current_speaker
-                else:
-                    # If there's a significant gap (>2 seconds), potentially switch speaker
-                    if row['time_gap'] > 2.0:
-                        # Switch speaker with some probability based on gap duration
-                        if row['time_gap'] > 5.0:
-                            current_speaker = speaker_map[current_speaker]
-                    
-                    df.at[idx, 'speaker_label'] = current_speaker
+            # Rule 1: Long gaps usually indicate speaker change
+            if row['time_gap'] > GAP_THRESHOLD_LONG:
+                should_switch = True
+                logger.debug(f"Speaker switch at idx {idx}: Long gap ({row['time_gap']:.2f}s)")
             
-            # Clean up temporary column
-            df.drop('time_gap', axis=1, inplace=True)
+            # Rule 2: Medium gaps with confidence drop
+            elif (row['time_gap'] > GAP_THRESHOLD_SHORT and 
+                  (row['confidence'] < CONFIDENCE_THRESHOLD or prev_row['confidence'] < CONFIDENCE_THRESHOLD)):
+                should_switch = True
+                logger.debug(f"Speaker switch at idx {idx}: Medium gap + low confidence")
+            
+            # Rule 3: Very short segments might be interjections
+            elif (row['segment_duration'] < 0.5 and row['word_count'] <= 2 and 
+                  row['time_gap'] > 0.5):
+                should_switch = True
+                logger.debug(f"Speaker switch at idx {idx}: Short interjection")
+            
+            # Rule 4: Pattern-based switching (every few segments if no clear indicators)
+            elif idx > 3 and idx % 4 == 0 and row['time_gap'] > 0.8:
+                # Periodic switching as fallback
+                should_switch = True
+                logger.debug(f"Speaker switch at idx {idx}: Periodic pattern")
+            
+            if should_switch:
+                current_speaker = speaker_map[current_speaker]
+            
+            df.at[idx, 'speaker_label'] = current_speaker
+        
+        # Clean up temporary columns
+        df.drop(['time_gap', 'segment_duration', 'text_length', 'word_count'], 
+                axis=1, inplace=True, errors='ignore')
+        
+        # Log speaker distribution
+        speaker_counts = df['speaker_label'].value_counts()
+        logger.info(f"Speaker distribution: {dict(speaker_counts)}")
         
         return df
     
@@ -320,8 +387,9 @@ class AriaSpeakerDiarization:
             for idx, row in df.iterrows():
                 # Split transcription into words - distribute time evenly across words
                 transcription_text = row['written']
-                start_time = row['start_sec']
-                end_time = row['end_sec']
+                # Use normalized timestamps starting from 0
+                start_time = row['start_sec_normalized']
+                end_time = row['end_sec_normalized']
                 speaker_id = row['speaker_label']
                 
                 words = transcription_text.split()
@@ -332,8 +400,8 @@ class AriaSpeakerDiarization:
                         word_start = start_time + (i * time_per_word)
                         word_end = start_time + ((i + 1) * time_per_word)
                         
-                        # Compute frame range for this word (assuming 30 fps)
-                        frame_list = self.compute_frame_range(word_start, word_end, fps=30.0)
+                        # Compute frame range for this word (Aria uses 20 fps)
+                        frame_list = self.compute_frame_range(word_start, word_end, fps=20.0)
                         
                         transcription_data.append({
                             'conversation_id': recording_name,  # Using recording name as conversation_id
@@ -481,8 +549,14 @@ def main():
     parser.add_argument("--output_dir", required=True, help="Output directory for processed files")
     parser.add_argument("--auth_token", help="HuggingFace auth token for pyannote models")
     parser.add_argument("--single_recording", help="Process single recording directory instead of entire dataset")
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     
     args = parser.parse_args()
+    
+    # Set logging level based on debug flag
+    if args.debug:
+        logging.getLogger().setLevel(logging.DEBUG)
+        logger.info("Debug logging enabled")
     
     # Initialize diarization system
     diarizer = AriaSpeakerDiarization(use_auth_token=args.auth_token)
