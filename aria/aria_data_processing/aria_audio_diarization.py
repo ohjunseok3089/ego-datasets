@@ -428,7 +428,7 @@ class AriaSpeakerDiarization:
         """
         # Primary and ONLY method: Voice-based clustering
         if audio_path and os.path.exists(audio_path):
-            logger.info("Using voice-based speaker clustering (음성 특성 기반 화자 분리)")
+            logger.info("Using voice-based speaker clustering)")
             try:
                 return self.cluster_speakers_by_voice(df, audio_path)
             except Exception as e:
