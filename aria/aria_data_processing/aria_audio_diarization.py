@@ -225,8 +225,10 @@ class AriaSpeakerDiarization:
                 valid_indices.append(idx)
         
         if len(features_list) < 2:
-            logger.warning("Not enough valid voice features for clustering, using fallback")
-            return self._improved_fallback_speaker_assignment(df)
+            logger.warning("Not enough valid voice features for clustering")
+            logger.warning("Assigning all segments to person_1 (single speaker detected)")
+            df['speaker_label'] = 'person_1'
+            return df
         
         # Normalize features
         scaler = StandardScaler()
@@ -328,27 +330,32 @@ class AriaSpeakerDiarization:
     
     def extract_audio_for_diarization(self, recording_dir: str, output_audio_path: str) -> bool:
         """
-        Extract audio from recording.vrs file for diarization
+        Extract audio from corresponding MP4 file for diarization
         
         Args:
-            recording_dir: Directory containing recording.vrs
+            recording_dir: Directory containing recording data
             output_audio_path: Output path for extracted audio
             
         Returns:
             True if successful, False otherwise
         """
-        vrs_path = os.path.join(recording_dir, "recording.vrs")
+        # Get recording name from directory
+        recording_name = os.path.basename(recording_dir)
         
-        if not os.path.exists(vrs_path):
-            logger.error(f"VRS file not found: {vrs_path}")
+        # Look for MP4 file in dataset directory
+        dataset_dir = "/mas/robots/prg-aria/dataset"
+        mp4_path = os.path.join(dataset_dir, f"{recording_name}.mp4")
+        
+        if not os.path.exists(mp4_path):
+            logger.error(f"MP4 file not found: {mp4_path}")
             return False
         
         try:
-            # Use ffmpeg to extract audio from VRS file
+            # Use ffmpeg to extract audio from MP4 file
             import subprocess
             
             cmd = [
-                "ffmpeg", "-i", vrs_path,
+                "ffmpeg", "-i", mp4_path,
                 "-vn",  # No video
                 "-acodec", "pcm_s16le",  # PCM 16-bit
                 "-ar", "16000",  # 16kHz sample rate (good for speech recognition)
@@ -361,14 +368,14 @@ class AriaSpeakerDiarization:
             result = subprocess.run(cmd, capture_output=True, text=True)
             
             if result.returncode == 0:
-                logger.info(f"Audio extracted successfully: {output_audio_path}")
+                logger.info(f"Audio extracted successfully from MP4: {output_audio_path}")
                 return True
             else:
                 logger.error(f"FFmpeg error: {result.stderr}")
                 return False
                 
         except Exception as e:
-            logger.error(f"Error extracting audio: {e}")
+            logger.error(f"Error extracting audio from MP4: {e}")
             return False
     
     def perform_diarization(self, audio_path: str) -> Optional[Annotation]:
@@ -419,17 +426,22 @@ class AriaSpeakerDiarization:
         Returns:
             DataFrame with speaker_label column added
         """
-        # Primary method: Voice-based clustering
+        # Primary and ONLY method: Voice-based clustering
         if audio_path and os.path.exists(audio_path):
-            logger.info("Using voice-based speaker clustering (primary method)")
+            logger.info("Using voice-based speaker clustering (음성 특성 기반 화자 분리)")
             try:
                 return self.cluster_speakers_by_voice(df, audio_path)
             except Exception as e:
-                logger.warning(f"Voice-based clustering failed: {e}, falling back to other methods")
+                logger.error(f"Voice-based clustering failed: {e}")
+                logger.error("Cannot proceed without voice analysis - audio extraction required!")
+                # Return with all segments as person_1 rather than using gap-based methods
+                df['speaker_label'] = 'person_1'
+                logger.warning("Assigning all segments to person_1 due to voice analysis failure")
+                return df
         
-        # Secondary method: Pyannote diarization
+        # Secondary method: Pyannote diarization (still voice-based)
         if diarization is not None:
-            logger.info("Using pyannote diarization (secondary method)")
+            logger.info("Using pyannote diarization (음성 기반 다이어리제이션)")
             # Create speaker_label column
             df['speaker_label'] = 'unknown'
             
@@ -451,15 +463,18 @@ class AriaSpeakerDiarization:
                 if speakers:
                     # Assign speaker with longest overlap
                     best_speaker = max(speakers, key=lambda x: x[1])[0]
-                    df.at[idx, 'speaker_label'] = best_speaker
+                    df.at[idx, 'speaker_label'] = f"person_{best_speaker.split('_')[-1]}"
                 else:
                     df.at[idx, 'speaker_label'] = 'person_unknown'
             
             return df
         
-        # Tertiary method: Improved heuristics
-        logger.info("Using improved heuristics (tertiary method)")
-        return self._improved_fallback_speaker_assignment(df)
+        # No voice-based methods available - refuse to use gap-based methods
+        logger.error("No voice-based speaker separation method available!")
+        logger.error("Audio extraction failed and pyannote not available.")
+        logger.error("Gap-based methods are disabled - all segments assigned to person_1")
+        df['speaker_label'] = 'person_1'
+        return df
     
     def _improved_fallback_speaker_assignment(self, df: pd.DataFrame) -> pd.DataFrame:
         """
