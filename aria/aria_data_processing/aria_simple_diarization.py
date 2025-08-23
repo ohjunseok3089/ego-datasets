@@ -192,8 +192,13 @@ class AriaDiarization:
             
             # Get statistics
             num_speakers = len(diarization.labels())
-            total_speech_duration = sum(segment.duration for segment, _ in diarization.itersegments())
-            num_segments = len(list(diarization.itersegments()))
+            
+            # Calculate total duration using itertracks
+            total_speech_duration = 0
+            num_segments = 0
+            for segment, _, _ in diarization.itertracks(yield_label=True):
+                total_speech_duration += segment.duration
+                num_segments += 1
             
             logger.info(f"Diarization complete:")
             logger.info(f"  - Speakers detected: {num_speakers}")
