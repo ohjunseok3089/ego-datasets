@@ -3,7 +3,7 @@
 Test script to read VRS file timestamps and understand the structure
 """
 
-import vrs
+import pyvrs as vrs
 import sys
 import os
 
