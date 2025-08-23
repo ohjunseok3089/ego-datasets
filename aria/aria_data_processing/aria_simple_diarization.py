@@ -1,21 +1,23 @@
 #!/usr/bin/env python3
 """
-Simple Aria Audio Diarization using pyannote.audio
-
-Just uses pyannote.audio pipeline directly - no complex voice analysis needed.
+Simple Audio Diarization for Aria Dataset
+Updated version with latest libraries and fixed errors
 """
 
 import os
 import sys
 import argparse
 import pandas as pd
+import numpy as np
 import logging
-from typing import Optional
+from typing import Optional, Dict, List
 import json
 import csv
 import math
 import subprocess
+from pathlib import Path
 
+# Pyannote imports
 try:
     from pyannote.audio import Pipeline
     from pyannote.core import Segment, Annotation
@@ -23,25 +25,27 @@ try:
     PYANNOTE_AVAILABLE = True
 except ImportError:
     PYANNOTE_AVAILABLE = False
-    print("Error: pyannote.audio not available. Install with: pip install pyannote.audio")
+    print("Error: pyannote.audio not available.")
+    print("Install with: pip install pyannote.audio torch torchaudio")
     sys.exit(1)
 
 # Set up logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO, 
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 
-class SimpleAriaDiarization:
-    """
-    Simple speaker diarization for Aria dataset using only pyannote.audio
-    """
+class AriaDiarization:
+    """Simple speaker diarization for Aria dataset"""
     
     def __init__(self, auth_token: str):
         """
         Initialize with HuggingFace auth token
         
         Args:
-            auth_token: HuggingFace access token
+            auth_token: HuggingFace access token for pyannote models
         """
         self.auth_token = auth_token
         self.pipeline = None
@@ -51,53 +55,61 @@ class SimpleAriaDiarization:
         """Initialize the pyannote speaker diarization pipeline"""
         try:
             logger.info("Initializing pyannote.audio pipeline...")
+            
+            # Use the latest pipeline version
             self.pipeline = Pipeline.from_pretrained(
                 "pyannote/speaker-diarization-3.1",
                 use_auth_token=self.auth_token
             )
             
-            # Send to GPU if available
-            if torch.cuda.is_available():
-                device = torch.device("cuda")
-                self.pipeline.to(device)
-                logger.info("Using GPU for diarization")
-            else:
-                logger.info("Using CPU for diarization")
-                
-            logger.info("Pyannote pipeline initialized successfully")
+            # Use GPU if available
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            self.pipeline.to(device)
+            logger.info(f"Using {device} for diarization")
+            logger.info("Pipeline initialized successfully")
+            
         except Exception as e:
-            logger.error(f"Failed to initialize pyannote pipeline: {e}")
+            logger.error(f"Failed to initialize pipeline: {e}")
             raise
     
     def nanoseconds_to_seconds(self, ns: int) -> float:
         """Convert nanoseconds to seconds"""
         return ns / 1_000_000_000
     
-    def compute_frame_range(self, start_time_s: float, end_time_s: float = None, fps: float = 20.0):
-        """Compute frame range for Aria (20 fps)"""
-        if not pd.isna(start_time_s) and pd.isfinite(start_time_s):
-            start_frame = math.floor(start_time_s * fps)
-        else:
+    def compute_frame_range(self, start_time_s: float, end_time_s: float = None, fps: float = 20.0) -> List[int]:
+        """
+        Compute frame range for Aria (20 fps)
+        
+        Args:
+            start_time_s: Start time in seconds
+            end_time_s: End time in seconds (optional)
+            fps: Frames per second (default 20 for Aria)
+            
+        Returns:
+            List of frame indices
+        """
+        # Check for NaN or invalid values using numpy
+        if pd.isna(start_time_s) or not np.isfinite(start_time_s):
             return []
-
-        if end_time_s is None or not pd.isfinite(end_time_s):
+        
+        start_frame = math.floor(start_time_s * fps)
+        
+        if end_time_s is None or pd.isna(end_time_s) or not np.isfinite(end_time_s):
             return [start_frame]
-
+        
         end_frame_inclusive = max(start_frame, math.ceil(end_time_s * fps) - 1)
-        if end_frame_inclusive < start_frame:
-            end_frame_inclusive = start_frame
-
         return list(range(start_frame, end_frame_inclusive + 1))
     
-    def load_speech_csv(self, csv_path: str) -> pd.DataFrame:
-        """Load and normalize speech.csv timestamps"""
+    def load_speech_csv(self, csv_path: str) -> Optional[pd.DataFrame]:
+        """Load and process speech.csv with timestamps"""
         try:
             df = pd.read_csv(csv_path)
             
             # Validate required columns
             required_cols = ['startTime_ns', 'endTime_ns', 'written', 'confidence']
-            if not all(col in df.columns for col in required_cols):
-                raise ValueError(f"CSV missing required columns: {required_cols}")
+            missing_cols = [col for col in required_cols if col not in df.columns]
+            if missing_cols:
+                raise ValueError(f"CSV missing required columns: {missing_cols}")
             
             # Convert nanoseconds to seconds
             df['start_sec'] = df['startTime_ns'].apply(self.nanoseconds_to_seconds)
@@ -105,11 +117,12 @@ class SimpleAriaDiarization:
             
             # Normalize timestamps to start from 0
             if len(df) > 0:
-                min_start_time = df['start_sec'].min()
-                df['start_sec_normalized'] = df['start_sec'] - min_start_time
-                df['end_sec_normalized'] = df['end_sec'] - min_start_time
+                min_start = df['start_sec'].min()
+                df['start_sec_normalized'] = df['start_sec'] - min_start
+                df['end_sec_normalized'] = df['end_sec'] - min_start
                 
-                logger.info(f"Loaded {len(df)} segments. Normalized timestamps to start from 0.0s")
+                logger.info(f"Loaded {len(df)} segments from {csv_path}")
+                logger.info(f"Time range: 0.0s to {df['end_sec_normalized'].max():.2f}s")
             
             return df
             
@@ -117,27 +130,41 @@ class SimpleAriaDiarization:
             logger.error(f"Error loading CSV {csv_path}: {e}")
             return None
     
-    def extract_audio_from_mp4(self, recording_dir: str, output_audio_path: str) -> bool:
-        """Extract audio from MP4 file"""
-        recording_name = os.path.basename(recording_dir)
-        dataset_dir = "/mas/robots/prg-aria/dataset"
-        mp4_path = os.path.join(dataset_dir, f"{recording_name}.mp4")
+    def extract_audio_from_mp4(self, mp4_path: str, output_audio_path: str) -> bool:
+        """
+        Extract audio from MP4 file using ffmpeg
         
+        Args:
+            mp4_path: Path to input MP4 file
+            output_audio_path: Path for output audio file
+            
+        Returns:
+            True if successful, False otherwise
+        """
         if not os.path.exists(mp4_path):
             logger.error(f"MP4 file not found: {mp4_path}")
             return False
         
         try:
+            # Create output directory if needed
+            os.makedirs(os.path.dirname(output_audio_path), exist_ok=True)
+            
+            # FFmpeg command for audio extraction
             cmd = [
                 "ffmpeg", "-i", mp4_path,
-                "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
-                "-y", output_audio_path
+                "-vn",  # No video
+                "-acodec", "pcm_s16le",  # PCM 16-bit
+                "-ar", "16000",  # 16kHz sample rate
+                "-ac", "1",  # Mono
+                "-y",  # Overwrite output
+                output_audio_path
             ]
             
+            # Run ffmpeg
             result = subprocess.run(cmd, capture_output=True, text=True)
             
             if result.returncode == 0:
-                logger.info(f"Audio extracted from MP4: {mp4_path}")
+                logger.info(f"Audio extracted successfully to {output_audio_path}")
                 return True
             else:
                 logger.error(f"FFmpeg error: {result.stderr}")
@@ -148,33 +175,30 @@ class SimpleAriaDiarization:
             return False
     
     def run_diarization(self, audio_path: str) -> Optional[Annotation]:
-        """Run pyannote diarization on audio file"""
+        """
+        Run speaker diarization on audio file
+        
+        Args:
+            audio_path: Path to audio file
+            
+        Returns:
+            Diarization annotation object or None if failed
+        """
         try:
-            logger.info(f"Running pyannote diarization on {audio_path}")
+            logger.info(f"Running diarization on {audio_path}")
+            
+            # Run the pipeline
             diarization = self.pipeline(audio_path)
             
-            # Log results with safer iteration
+            # Get statistics
             num_speakers = len(diarization.labels())
-            total_duration = 0
-            track_count = 0
+            total_speech_duration = sum(segment.duration for segment, _ in diarization.itersegments())
+            num_segments = len(list(diarization.itersegments()))
             
-            # Safely calculate total duration
-            for track_info in diarization.itertracks():
-                if len(track_info) >= 1:
-                    segment = track_info[0]
-                    total_duration += segment.duration
-                    track_count += 1
-            
-            logger.info(f"Detected {num_speakers} speakers, {total_duration:.2f}s total speech in {track_count} segments")
-            
-            # Debug: show format of first few tracks
-            track_formats = []
-            for i, track_info in enumerate(diarization.itertracks(yield_label=True)):
-                track_formats.append(f"Track {i}: {len(track_info)} items")
-                if i >= 2:  # Only show first 3
-                    break
-            if track_formats:
-                logger.info(f"Track format examples: {'; '.join(track_formats)}")
+            logger.info(f"Diarization complete:")
+            logger.info(f"  - Speakers detected: {num_speakers}")
+            logger.info(f"  - Total speech duration: {total_speech_duration:.2f}s")
+            logger.info(f"  - Number of segments: {num_segments}")
             
             return diarization
             
@@ -182,102 +206,88 @@ class SimpleAriaDiarization:
             logger.error(f"Diarization failed: {e}")
             return None
     
-    def assign_speakers_from_diarization(self, df: pd.DataFrame, diarization: Annotation) -> pd.DataFrame:
-        """Assign speaker labels based on pyannote diarization results"""
+    def assign_speakers_to_segments(self, df: pd.DataFrame, diarization: Annotation) -> pd.DataFrame:
+        """
+        Assign speaker labels to transcript segments based on diarization
+        
+        Args:
+            df: DataFrame with transcript segments
+            diarization: Pyannote diarization results
+            
+        Returns:
+            DataFrame with added speaker_label column
+        """
+        # Initialize speaker column
         df['speaker_label'] = 'person_unknown'
         
-        # Check if diarization has any speakers
         if not diarization or len(diarization.labels()) == 0:
-            logger.warning("No speakers detected in diarization, all segments will be labeled as 'person_unknown'")
+            logger.warning("No speakers detected in diarization")
             return df
         
-        logger.info(f"Assigning speakers from {len(diarization.labels())} detected speakers")
+        logger.info(f"Assigning {len(diarization.labels())} speakers to {len(df)} segments")
         
+        # Process each transcript segment
         for idx, row in df.iterrows():
             start_time = row['start_sec_normalized']
             end_time = row['end_sec_normalized']
+            segment = Segment(start_time, end_time)
             
             # Find overlapping speakers
-            segment = Segment(start_time, end_time)
-            speakers = []
+            overlaps = []
             
-            # Iterate through diarization results with flexible unpacking
-            for track_data in diarization.itertracks(yield_label=True):
-                try:
-                    # Handle both 2-tuple and 3-tuple returns
-                    if len(track_data) == 3:
-                        turn, _, speaker = track_data
-                        speech_segment = turn
-                    elif len(track_data) == 2:
-                        turn, speaker = track_data  
-                        speech_segment = turn
-                    else:
-                        logger.warning(f"Unexpected diarization format: {len(track_data)} items")
-                        continue
-                        
-                    # Check for overlap using safe methods
-                    if hasattr(segment, 'overlaps') and hasattr(speech_segment, 'start') and hasattr(speech_segment, 'end'):
-                        # Use manual overlap check to avoid pyannote comparison issues
-                        overlap_start = max(segment.start, speech_segment.start)
-                        overlap_end = min(segment.end, speech_segment.end)
-                        
-                        if overlap_end > overlap_start:  # There is overlap
-                            overlap_dur = overlap_end - overlap_start
-                            if overlap_dur > 0.05:  # At least 50ms overlap
-                                speakers.append((speaker, overlap_dur))
-                    else:
-                        logger.warning(f"Segment or speech_segment missing required attributes: {segment}, {speech_segment}")
-                        
-                except Exception as e:
-                    logger.warning(f"Error processing track data {track_data}: {e}")
-                    # Try basic time-based overlap as fallback if we can extract basic info
-                    try:
-                        if len(track_data) >= 2:
-                            turn = track_data[0] 
-                            speaker = track_data[-1]  # last item should be speaker
-                            overlap_start = max(float(segment.start), float(turn.start))
-                            overlap_end = min(float(segment.end), float(turn.end))
-                            overlap_dur = overlap_end - overlap_start
-                            if overlap_dur > 0.05:  # At least 50ms overlap
-                                speakers.append((speaker, overlap_dur))
-                    except Exception as e2:
-                        logger.error(f"Fallback overlap calculation also failed: {e2}")
+            for speaker_segment, _, speaker in diarization.itertracks(yield_label=True):
+                # Calculate overlap
+                overlap_start = max(segment.start, speaker_segment.start)
+                overlap_end = min(segment.end, speaker_segment.end)
+                overlap_duration = max(0, overlap_end - overlap_start)
+                
+                # Minimum 50ms overlap required
+                if overlap_duration > 0.05:
+                    overlaps.append((speaker, overlap_duration))
             
-            if speakers:
-                # Assign speaker with longest overlap
-                best_speaker = max(speakers, key=lambda x: x[1])[0]
-                # Convert pyannote speaker names to person_X format
-                try:
-                    if 'SPEAKER_' in str(best_speaker):
-                        speaker_num = str(best_speaker).replace('SPEAKER_', '')
-                        df.at[idx, 'speaker_label'] = f'person_{int(speaker_num) + 1}'
-                    else:
-                        # Handle other speaker label formats
-                        df.at[idx, 'speaker_label'] = f'person_{str(best_speaker)}'
-                except (ValueError, TypeError) as e:
-                    logger.warning(f"Error converting speaker label {best_speaker}: {e}")
-                    df.at[idx, 'speaker_label'] = f'person_{str(best_speaker)}'
-            
+            # Assign speaker with maximum overlap
+            if overlaps:
+                best_speaker = max(overlaps, key=lambda x: x[1])[0]
+                # Convert speaker ID to readable format
+                if isinstance(best_speaker, str) and 'SPEAKER_' in best_speaker:
+                    speaker_num = int(best_speaker.replace('SPEAKER_', '')) + 1
+                    df.at[idx, 'speaker_label'] = f'person_{speaker_num}'
+                else:
+                    df.at[idx, 'speaker_label'] = f'person_{best_speaker}'
+        
         # Log speaker distribution
         speaker_counts = df['speaker_label'].value_counts()
-        logger.info(f"Speaker assignment result: {dict(speaker_counts)}")
+        logger.info("Speaker assignment complete:")
+        for speaker, count in speaker_counts.items():
+            logger.info(f"  - {speaker}: {count} segments")
         
         return df
     
-    def generate_transcript_csv(self, df: pd.DataFrame, recording_name: str, transcript_dir: str):
-        """Generate transcript CSV in Ego4D format"""
-        transcript_path = os.path.join(transcript_dir, 'ground_truth_transcriptions_with_frames.csv')
-        os.makedirs(transcript_dir, exist_ok=True)
+    def generate_transcript_csv(self, df: pd.DataFrame, recording_name: str, output_dir: str) -> int:
+        """
+        Generate transcript CSV in Aria format
+        
+        Args:
+            df: DataFrame with speaker-labeled segments
+            recording_name: Name of the recording
+            output_dir: Output directory for transcript
+            
+        Returns:
+            Number of transcript entries generated
+        """
+        transcript_path = os.path.join(output_dir, 'transcripts.csv')
+        os.makedirs(output_dir, exist_ok=True)
         
         transcription_data = []
         
-        for idx, row in df.iterrows():
-            transcription_text = row['written']
+        for _, row in df.iterrows():
+            text = row['written']
             start_time = row['start_sec_normalized']
             end_time = row['end_sec_normalized']
             speaker_id = row['speaker_label']
             
-            words = transcription_text.split()
+            # Split into words and assign timestamps
+            words = text.split()
             if words:
                 time_per_word = (end_time - start_time) / len(words)
                 
@@ -285,27 +295,26 @@ class SimpleAriaDiarization:
                     word_start = start_time + (i * time_per_word)
                     word_end = start_time + ((i + 1) * time_per_word)
                     
-                    # Compute frame range (20 fps for Aria)
-                    frame_list = self.compute_frame_range(word_start, word_end, fps=20.0)
+                    # Compute frame range
+                    frames = self.compute_frame_range(word_start, word_end, fps=20.0)
                     
                     transcription_data.append({
                         'conversation_id': recording_name,
-                        'endTime': round(word_end, 2),
+                        'startTime': round(word_start, 3),
+                        'endTime': round(word_end, 3),
                         'speaker_id': speaker_id,
-                        'startTime': round(word_start, 2),
                         'word': word,
-                        'frame': json.dumps(frame_list, separators=(",", ":"))
+                        'frames': json.dumps(frames) if frames else '[]'
                     })
         
         # Sort by start time
         transcription_data.sort(key=lambda x: x['startTime'])
         
-        # Write or append to CSV
-        file_exists = os.path.exists(transcript_path)
-        
+        # Write to CSV
         if transcription_data:
+            file_exists = os.path.exists(transcript_path)
             with open(transcript_path, 'a' if file_exists else 'w', newline='') as f:
-                fieldnames = ['conversation_id', 'endTime', 'speaker_id', 'startTime', 'word', 'frame']
+                fieldnames = ['conversation_id', 'startTime', 'endTime', 'speaker_id', 'word', 'frames']
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
                 
                 if not file_exists:
@@ -313,129 +322,208 @@ class SimpleAriaDiarization:
                 
                 writer.writerows(transcription_data)
             
-            logger.info(f"Generated {len(transcription_data)} transcript entries for {recording_name}")
+            logger.info(f"Generated {len(transcription_data)} transcript entries")
         
         return len(transcription_data)
     
-    def process_single_recording(self, recording_dir: str, output_dir: str) -> bool:
-        """Process a single recording using pyannote.audio"""
-        recording_name = os.path.basename(recording_dir)
-        logger.info(f"Processing recording: {recording_name}")
+    def process_recording(self, 
+                         recording_dir: str, 
+                         mp4_path: str,
+                         output_dir: str) -> bool:
+        """
+        Process a single recording
         
-        # Paths
+        Args:
+            recording_dir: Directory containing speech.csv
+            mp4_path: Path to MP4 file
+            output_dir: Output directory
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        recording_name = os.path.basename(recording_dir)
+        logger.info(f"\n{'='*60}")
+        logger.info(f"Processing: {recording_name}")
+        logger.info(f"{'='*60}")
+        
+        # Setup paths
         speech_csv_path = os.path.join(recording_dir, "speech.csv")
         output_recording_dir = os.path.join(output_dir, recording_name)
         output_csv_path = os.path.join(output_recording_dir, "speech_with_speakers.csv")
-        temp_audio_path = os.path.join(output_recording_dir, "temp_audio.wav")
-        
-        # Create output directory
-        os.makedirs(output_recording_dir, exist_ok=True)
+        temp_audio_path = os.path.join(output_recording_dir, "audio.wav")
         
         # Check if speech.csv exists
         if not os.path.exists(speech_csv_path):
             logger.warning(f"No speech.csv found in {recording_dir}")
             return False
         
-        # Load speech data
-        df = self.load_speech_csv(speech_csv_path)
-        if df is None:
-            return False
-        
-        # Extract audio from MP4
-        if not self.extract_audio_from_mp4(recording_dir, temp_audio_path):
-            logger.error(f"Failed to extract audio for {recording_name}")
-            return False
-        
-        # Run pyannote diarization
-        diarization = self.run_diarization(temp_audio_path)
-        if diarization is None:
-            logger.error(f"Diarization failed for {recording_name}")
-            return False
-        
-        # Assign speakers based on diarization
         try:
-            df_with_speakers = self.assign_speakers_from_diarization(df, diarization)
+            # Step 1: Load speech data
+            df = self.load_speech_csv(speech_csv_path)
+            if df is None or len(df) == 0:
+                logger.error("Failed to load speech data")
+                return False
+            
+            # Step 2: Extract audio
+            if not self.extract_audio_from_mp4(mp4_path, temp_audio_path):
+                logger.error("Failed to extract audio")
+                return False
+            
+            # Step 3: Run diarization
+            diarization = self.run_diarization(temp_audio_path)
+            if diarization is None:
+                logger.error("Diarization failed")
+                return False
+            
+            # Step 4: Assign speakers
+            df_with_speakers = self.assign_speakers_to_segments(df, diarization)
+            
+            # Step 5: Save results
+            os.makedirs(output_recording_dir, exist_ok=True)
+            df_with_speakers.to_csv(output_csv_path, index=False)
+            logger.info(f"Saved results to {output_csv_path}")
+            
+            # Step 6: Generate transcript
+            transcript_dir = os.path.join(output_dir, "transcripts")
+            self.generate_transcript_csv(df_with_speakers, recording_name, transcript_dir)
+            
+            # Clean up temp audio
+            if os.path.exists(temp_audio_path):
+                os.remove(temp_audio_path)
+                logger.info("Cleaned up temporary files")
+            
+            logger.info(f"✓ Successfully processed {recording_name}")
+            return True
+            
         except Exception as e:
-            logger.error(f"Speaker assignment failed for {recording_name}: {e}")
-            # Continue with original dataframe but mark all as unknown
-            df['speaker_label'] = 'person_unknown'
-            df_with_speakers = df
-        
-        # Save updated CSV
-        df_with_speakers.to_csv(output_csv_path, index=False)
-        logger.info(f"Saved speaker-labeled CSV: {output_csv_path}")
-        
-        # Generate transcript
-        transcript_dir = "/mas/robots/prg-aria/transcript"
-        transcript_count = self.generate_transcript_csv(df_with_speakers, recording_name, transcript_dir)
-        
-        # Clean up temp audio
-        if os.path.exists(temp_audio_path):
-            os.remove(temp_audio_path)
-        
-        return True
+            logger.error(f"Error processing {recording_name}: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
     
-    def process_aria_dataset(self, input_dir: str, output_dir: str):
-        """Process entire Aria dataset"""
-        logger.info(f"Processing Aria dataset from: {input_dir}")
+    def process_dataset(self, 
+                       input_dir: str, 
+                       mp4_dir: str,
+                       output_dir: str):
+        """
+        Process entire dataset
+        
+        Args:
+            input_dir: Directory containing recording folders with speech.csv
+            mp4_dir: Directory containing MP4 files
+            output_dir: Output directory for results
+        """
+        logger.info(f"\nStarting batch processing")
+        logger.info(f"Input directory: {input_dir}")
+        logger.info(f"MP4 directory: {mp4_dir}")
         logger.info(f"Output directory: {output_dir}")
         
+        # Create output directories
         os.makedirs(output_dir, exist_ok=True)
-        os.makedirs("/mas/robots/prg-aria/transcript", exist_ok=True)
         
-        processed_count = 0
-        failed_count = 0
-        
-        # Process all recording directories
-        for item in os.listdir(input_dir):
+        # Find all recordings
+        recordings = []
+        for item in sorted(os.listdir(input_dir)):
             item_path = os.path.join(input_dir, item)
-            
-            if not os.path.isdir(item_path) or not item.startswith('loc'):
-                continue
-            
-            speech_csv = os.path.join(item_path, "speech.csv")
-            if os.path.exists(speech_csv):
-                try:
-                    success = self.process_single_recording(item_path, output_dir)
-                    if success:
-                        processed_count += 1
+            if os.path.isdir(item_path):
+                speech_csv = os.path.join(item_path, "speech.csv")
+                if os.path.exists(speech_csv):
+                    mp4_path = os.path.join(mp4_dir, f"{item}.mp4")
+                    if os.path.exists(mp4_path):
+                        recordings.append((item_path, mp4_path))
                     else:
-                        failed_count += 1
-                except Exception as e:
-                    logger.error(f"Error processing {item}: {e}")
-                    failed_count += 1
+                        logger.warning(f"MP4 not found for {item}: {mp4_path}")
         
-        logger.info(f"Processing complete. Processed: {processed_count}, Failed: {failed_count}")
+        logger.info(f"Found {len(recordings)} recordings to process")
+        
+        # Process recordings
+        successful = 0
+        failed = 0
+        
+        for i, (recording_dir, mp4_path) in enumerate(recordings, 1):
+            logger.info(f"\n[{i}/{len(recordings)}] Processing...")
+            
+            try:
+                if self.process_recording(recording_dir, mp4_path, output_dir):
+                    successful += 1
+                else:
+                    failed += 1
+            except Exception as e:
+                logger.error(f"Unexpected error: {e}")
+                failed += 1
+        
+        # Final summary
+        logger.info(f"\n{'='*60}")
+        logger.info(f"PROCESSING COMPLETE")
+        logger.info(f"{'='*60}")
+        logger.info(f"Total: {len(recordings)}")
+        logger.info(f"Successful: {successful}")
+        logger.info(f"Failed: {failed}")
+        logger.info(f"Success rate: {successful/len(recordings)*100:.1f}%")
 
 
 def main():
-    """Main function"""
-    parser = argparse.ArgumentParser(description="Simple Aria Diarization using pyannote.audio")
-    parser.add_argument("--input_dir", required=True, help="Input directory containing Aria recordings")
-    parser.add_argument("--output_dir", required=True, help="Output directory for processed files")
-    parser.add_argument("--auth_token", required=True, help="HuggingFace auth token for pyannote models")
-    parser.add_argument("--single_recording", help="Process single recording directory")
+    """Main entry point"""
+    parser = argparse.ArgumentParser(
+        description="Simple Audio Diarization for Aria Dataset",
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    
+    parser.add_argument(
+        "--input_dir", 
+        required=True, 
+        help="Directory containing recording folders with speech.csv files"
+    )
+    
+    parser.add_argument(
+        "--mp4_dir", 
+        required=True,
+        help="Directory containing MP4 files"
+    )
+    
+    parser.add_argument(
+        "--output_dir", 
+        required=True, 
+        help="Output directory for processed files"
+    )
+    
+    parser.add_argument(
+        "--auth_token", 
+        required=True,
+        help="HuggingFace auth token for pyannote models"
+    )
+    
+    parser.add_argument(
+        "--single", 
+        help="Process only a single recording (provide recording name)"
+    )
     
     args = parser.parse_args()
     
     # Initialize diarization system
     try:
-        diarizer = SimpleAriaDiarization(auth_token=args.auth_token)
+        diarizer = AriaDiarization(auth_token=args.auth_token)
     except Exception as e:
-        logger.error(f"Failed to initialize diarizer: {e}")
+        logger.error(f"Failed to initialize: {e}")
         sys.exit(1)
     
-    if args.single_recording:
-        # Process single recording
-        success = diarizer.process_single_recording(args.single_recording, args.output_dir)
-        if success:
-            logger.info("Single recording processed successfully")
-        else:
-            logger.error("Failed to process single recording")
+    # Process single or batch
+    if args.single:
+        recording_dir = os.path.join(args.input_dir, args.single)
+        mp4_path = os.path.join(args.mp4_dir, f"{args.single}.mp4")
+        
+        if not os.path.exists(recording_dir):
+            logger.error(f"Recording directory not found: {recording_dir}")
             sys.exit(1)
+        
+        if not os.path.exists(mp4_path):
+            logger.error(f"MP4 file not found: {mp4_path}")
+            sys.exit(1)
+        
+        success = diarizer.process_recording(recording_dir, mp4_path, args.output_dir)
+        sys.exit(0 if success else 1)
     else:
-        # Process entire dataset
-        diarizer.process_aria_dataset(args.input_dir, args.output_dir)
+        diarizer.process_dataset(args.input_dir, args.mp4_dir, args.output_dir)
 
 
 if __name__ == "__main__":
