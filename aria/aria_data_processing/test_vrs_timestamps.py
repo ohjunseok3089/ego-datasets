@@ -15,7 +15,7 @@ def analyze_vrs_file(vrs_path):
     
     try:
         # Open VRS file
-        reader = vrs.VRSReader(vrs_path)
+        reader = vrs.SyncVRSReader(vrs_path)
         
         print(f"=== VRS File Analysis: {vrs_path} ===")
         print(f"File size: {os.path.getsize(vrs_path):,} bytes")
