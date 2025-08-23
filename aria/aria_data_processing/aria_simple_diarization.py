@@ -153,10 +153,28 @@ class SimpleAriaDiarization:
             logger.info(f"Running pyannote diarization on {audio_path}")
             diarization = self.pipeline(audio_path)
             
-            # Log results
+            # Log results with safer iteration
             num_speakers = len(diarization.labels())
-            total_duration = sum(segment.duration for segment, _, _ in diarization.itertracks())
-            logger.info(f"Detected {num_speakers} speakers, {total_duration:.2f}s total speech")
+            total_duration = 0
+            track_count = 0
+            
+            # Safely calculate total duration
+            for track_info in diarization.itertracks():
+                if len(track_info) >= 1:
+                    segment = track_info[0]
+                    total_duration += segment.duration
+                    track_count += 1
+            
+            logger.info(f"Detected {num_speakers} speakers, {total_duration:.2f}s total speech in {track_count} segments")
+            
+            # Debug: show format of first few tracks
+            track_formats = []
+            for i, track_info in enumerate(diarization.itertracks(yield_label=True)):
+                track_formats.append(f"Track {i}: {len(track_info)} items")
+                if i >= 2:  # Only show first 3
+                    break
+            if track_formats:
+                logger.info(f"Track format examples: {'; '.join(track_formats)}")
             
             return diarization
             
@@ -168,6 +186,13 @@ class SimpleAriaDiarization:
         """Assign speaker labels based on pyannote diarization results"""
         df['speaker_label'] = 'person_unknown'
         
+        # Check if diarization has any speakers
+        if not diarization or len(diarization.labels()) == 0:
+            logger.warning("No speakers detected in diarization, all segments will be labeled as 'person_unknown'")
+            return df
+        
+        logger.info(f"Assigning speakers from {len(diarization.labels())} detected speakers")
+        
         for idx, row in df.iterrows():
             start_time = row['start_sec_normalized']
             end_time = row['end_sec_normalized']
@@ -176,7 +201,16 @@ class SimpleAriaDiarization:
             segment = Segment(start_time, end_time)
             speakers = []
             
-            for speech_segment, _, speaker in diarization.itertracks(yield_label=True):
+            # Handle different return formats from pyannote itertracks
+            for track_info in diarization.itertracks(yield_label=True):
+                if len(track_info) == 3:
+                    speech_segment, _, speaker = track_info
+                elif len(track_info) == 2:
+                    speech_segment, speaker = track_info
+                else:
+                    logger.warning(f"Unexpected track info format: {track_info}")
+                    continue
+                    
                 if segment.overlaps(speech_segment):
                     overlap_duration = segment & speech_segment
                     if overlap_duration.duration > 0.05:  # At least 50ms overlap
