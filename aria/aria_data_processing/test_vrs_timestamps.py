@@ -45,18 +45,22 @@ def analyze_vrs_file(vrs_path):
                     actual_end_timestamp = data_end
         
         print(f"\n=== Overall Recording Info ===")
-        print(f"Recording start timestamp: {actual_start_timestamp} ns")
-        print(f"Recording end timestamp: {actual_end_timestamp} ns")
-        print(f"Total duration: {(actual_end_timestamp - actual_start_timestamp) / 1e9:.2f} seconds")
+        print(f"Recording start timestamp: {actual_start_timestamp} seconds")
+        print(f"Recording end timestamp: {actual_end_timestamp} seconds")
+        print(f"Total duration: {actual_end_timestamp - actual_start_timestamp:.2f} seconds")
         
-        # Convert to datetime
+        # Convert to datetime (assuming Unix timestamp)
         import datetime
-        start_dt = datetime.datetime.fromtimestamp(actual_start_timestamp / 1e9)
-        end_dt = datetime.datetime.fromtimestamp(actual_end_timestamp / 1e9)
+        start_dt = datetime.datetime.fromtimestamp(actual_start_timestamp)
+        end_dt = datetime.datetime.fromtimestamp(actual_end_timestamp)
         print(f"Recording start time: {start_dt}")
         print(f"Recording end time: {end_dt}")
         
-        return actual_start_timestamp
+        # Convert to nanoseconds for speech.csv comparison
+        vrs_start_ns = int(actual_start_timestamp * 1e9)
+        print(f"VRS start in nanoseconds: {vrs_start_ns}")
+        
+        return vrs_start_ns
         
         # Analyze each stream
         for stream_id in stream_ids:
@@ -66,9 +70,9 @@ def analyze_vrs_file(vrs_path):
             print(f"  - Data records: {stream_info.get('data_records_count', 0)}")
             
             if stream_info.get('data_records_count', 0) > 0:
-                print(f"  - Data start: {stream_info['first_data_record_timestamp']:.6f} ns")
-                print(f"  - Data end: {stream_info['last_data_record_timestamp']:.6f} ns")
-                print(f"  - Duration: {(stream_info['last_data_record_timestamp'] - stream_info['first_data_record_timestamp']) / 1e9:.2f} seconds")
+                print(f"  - Data start: {stream_info['first_data_record_timestamp']:.6f} seconds")
+                print(f"  - Data end: {stream_info['last_data_record_timestamp']:.6f} seconds")
+                print(f"  - Duration: {stream_info['last_data_record_timestamp'] - stream_info['first_data_record_timestamp']:.2f} seconds")
         
     except Exception as e:
         print(f"Error reading VRS file: {e}")
