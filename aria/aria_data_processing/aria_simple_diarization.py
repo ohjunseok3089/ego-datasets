@@ -256,8 +256,8 @@ class AriaDiarization:
                 overlap_end = min(segment.end, speaker_segment.end)
                 overlap_duration = max(0, overlap_end - overlap_start)
                 
-                # Minimum 50ms overlap required
-                if overlap_duration > 0.05:
+                # Minimum 20ms overlap required (more lenient)
+                if overlap_duration > 0.02:
                     overlaps.append((speaker, overlap_duration))
             
             # Assign speaker with maximum overlap
@@ -278,7 +278,8 @@ class AriaDiarization:
         
         return df
     
-    def generate_transcript_csv(self, df: pd.DataFrame, recording_name: str, output_dir: str) -> int:
+    def generate_transcript_csv(self, df: pd.DataFrame, recording_name: str, output_dir: str, 
+                               ground_truth_path: str = None) -> int:
         """
         Generate transcript CSV in Aria format
         
@@ -338,6 +339,26 @@ class AriaDiarization:
                 writer.writerows(transcription_data)
             
             logger.info(f"Generated {len(transcription_data)} transcript entries")
+            
+            # Also append to ground truth CSV if path provided
+            if ground_truth_path:
+                try:
+                    os.makedirs(os.path.dirname(ground_truth_path), exist_ok=True)
+                    file_exists = os.path.exists(ground_truth_path)
+                    
+                    with open(ground_truth_path, 'a' if file_exists else 'w', newline='') as f:
+                        fieldnames = ['conversation_id', 'startTime', 'endTime', 'speaker_id', 'word', 'frames']
+                        writer = csv.DictWriter(f, fieldnames=fieldnames)
+                        
+                        if not file_exists:
+                            writer.writeheader()
+                        
+                        writer.writerows(transcription_data)
+                    
+                    logger.info(f"Appended {len(transcription_data)} entries to ground truth CSV: {ground_truth_path}")
+                    
+                except Exception as e:
+                    logger.warning(f"Failed to write to ground truth CSV: {e}")
         
         return len(transcription_data)
     
@@ -400,7 +421,8 @@ class AriaDiarization:
             
             # Step 6: Generate transcript
             transcript_dir = os.path.join(output_dir, "transcripts")
-            self.generate_transcript_csv(df_with_speakers, recording_name, transcript_dir)
+            ground_truth_path = "/mas/robots/prg-aria/transcript/ground_truth_transciptions.csv"
+            self.generate_transcript_csv(df_with_speakers, recording_name, transcript_dir, ground_truth_path)
             
             # Clean up temp audio
             if os.path.exists(temp_audio_path):
