@@ -187,8 +187,8 @@ class AriaDiarization:
         try:
             logger.info(f"Running diarization on {audio_path}")
             
-            # Run the pipeline
-            diarization = self.pipeline(audio_path)
+            # Run the pipeline with speaker constraints
+            diarization = self.pipeline(audio_path, min_speakers=1, max_speakers=2)
             
             # Get statistics
             num_speakers = len(diarization.labels())
