@@ -34,6 +34,15 @@ except ImportError:
     print("Install with: pip install pyannote.audio torch torchaudio")
     sys.exit(1)
 
+# VRS timestamp extractor
+try:
+    from vrs_timestamp_extractor import VRSTimestampExtractor
+    VRS_EXTRACTOR_AVAILABLE = True
+    print("VRS timestamp extractor loaded successfully")
+except ImportError:
+    VRS_EXTRACTOR_AVAILABLE = False
+    print("Warning: VRS timestamp extractor not available. Install pyvrs: pip install pyvrs")
+
 # Set up logging
 logging.basicConfig(
     level=logging.INFO, 
@@ -54,7 +63,9 @@ class AriaDiarization:
         """
         self.auth_token = auth_token
         self.pipeline = None
+        self.vrs_extractor = None
         self._initialize_pipeline()
+        self._initialize_vrs_extractor()
     
     def _initialize_pipeline(self):
         """Initialize the pyannote speaker diarization pipeline"""
@@ -81,6 +92,19 @@ class AriaDiarization:
             import traceback
             traceback.print_exc()
             raise
+    
+    def _initialize_vrs_extractor(self):
+        """Initialize VRS timestamp extractor"""
+        if VRS_EXTRACTOR_AVAILABLE:
+            try:
+                self.vrs_extractor = VRSTimestampExtractor()
+                logger.info("VRS timestamp extractor initialized successfully")
+            except Exception as e:
+                logger.warning(f"Failed to initialize VRS extractor: {e}")
+                self.vrs_extractor = None
+        else:
+            logger.warning("VRS timestamp extractor not available - using fallback timestamp method")
+            self.vrs_extractor = None
     
     def nanoseconds_to_seconds(self, ns: int) -> float:
         """Convert nanoseconds to seconds"""
@@ -110,7 +134,7 @@ class AriaDiarization:
         end_frame_inclusive = max(start_frame, math.ceil(end_time_s * fps) - 1)
         return list(range(start_frame, end_frame_inclusive + 1))
     
-    def load_speech_csv(self, csv_path: str) -> Optional[pd.DataFrame]:
+    def load_speech_csv(self, csv_path: str, vrs_path: str = None) -> Optional[pd.DataFrame]:
         """Load and process speech.csv with timestamps"""
         try:
             df = pd.read_csv(csv_path)
@@ -120,6 +144,30 @@ class AriaDiarization:
             missing_cols = [col for col in required_cols if col not in df.columns]
             if missing_cols:
                 raise ValueError(f"CSV missing required columns: {missing_cols}")
+            
+            # Try to use VRS timestamps for proper synchronization
+            if self.vrs_extractor and vrs_path and os.path.exists(vrs_path):
+                logger.info("Using VRS timestamps for proper time synchronization")
+                
+                # Extract VRS timestamps
+                vrs_result = self.vrs_extractor.extract_recording_timestamps(vrs_path)
+                if vrs_result:
+                    vrs_start_ns, vrs_end_ns, duration = vrs_result
+                    
+                    # Convert speech timestamps to relative seconds from VRS start
+                    df_with_relative = self.vrs_extractor.convert_speech_timestamps_to_relative(df, vrs_start_ns)
+                    if df_with_relative is not None:
+                        df = df_with_relative
+                        # Use relative timestamps for normalization
+                        df['start_sec_normalized'] = df['start_sec_relative']
+                        df['end_sec_normalized'] = df['end_sec_relative']
+                        
+                        logger.info(f"Loaded {len(df)} segments with VRS-synchronized timestamps")
+                        logger.info(f"Relative time range: {df['start_sec_normalized'].min():.3f}s to {df['end_sec_normalized'].max():.3f}s")
+                        return df
+            
+            # Fallback: use original method (normalize to start from 0)
+            logger.info("Using fallback timestamp normalization (relative to first speech segment)")
             
             # Convert nanoseconds to seconds
             df['start_sec'] = df['startTime_ns'].apply(self.nanoseconds_to_seconds)
@@ -384,6 +432,7 @@ class AriaDiarization:
         
         # Setup paths
         speech_csv_path = os.path.join(recording_dir, "speech.csv")
+        vrs_path = os.path.join(recording_dir, "recording.vrs")
         output_recording_dir = os.path.join(output_dir, recording_name)
         output_csv_path = os.path.join(output_recording_dir, "speech_with_speakers.csv")
         temp_audio_path = os.path.join(output_recording_dir, "audio.wav")
@@ -394,8 +443,8 @@ class AriaDiarization:
             return False
         
         try:
-            # Step 1: Load speech data
-            df = self.load_speech_csv(speech_csv_path)
+            # Step 1: Load speech data with VRS timestamp synchronization
+            df = self.load_speech_csv(speech_csv_path, vrs_path)
             if df is None or len(df) == 0:
                 logger.error("Failed to load speech data")
                 return False
