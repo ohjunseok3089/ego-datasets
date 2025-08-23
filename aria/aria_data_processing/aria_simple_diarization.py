@@ -55,21 +55,26 @@ class AriaDiarization:
         """Initialize the pyannote speaker diarization pipeline"""
         try:
             logger.info("Initializing pyannote.audio pipeline...")
+            logger.info("This may take a few minutes on first run (downloading models)...")
             
             # Use the latest pipeline version
+            logger.info("Loading pipeline from HuggingFace...")
             self.pipeline = Pipeline.from_pretrained(
                 "pyannote/speaker-diarization-3.1",
                 use_auth_token=self.auth_token
             )
+            logger.info("Pipeline loaded successfully")
             
-            # Use GPU if available
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            device = torch.device("cuda")
+            logger.info(f"Moving pipeline to {device}...")
             self.pipeline.to(device)
             logger.info(f"Using {device} for diarization")
             logger.info("Pipeline initialized successfully")
             
         except Exception as e:
             logger.error(f"Failed to initialize pipeline: {e}")
+            import traceback
+            traceback.print_exc()
             raise
     
     def nanoseconds_to_seconds(self, ns: int) -> float:
