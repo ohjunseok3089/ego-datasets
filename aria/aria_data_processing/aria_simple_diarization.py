@@ -17,12 +17,17 @@ import math
 import subprocess
 from pathlib import Path
 
+os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+
 # Pyannote imports
 try:
+    print("Loading torch...")
+    import torch
+    print("Loading pyannote...")
     from pyannote.audio import Pipeline
     from pyannote.core import Segment, Annotation
-    import torch
     PYANNOTE_AVAILABLE = True
+    print("All imports successful")
 except ImportError:
     PYANNOTE_AVAILABLE = False
     print("Error: pyannote.audio not available.")
@@ -65,7 +70,7 @@ class AriaDiarization:
             )
             logger.info("Pipeline loaded successfully")
             
-            device = torch.device("cuda")
+                         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             logger.info(f"Moving pipeline to {device}...")
             self.pipeline.to(device)
             logger.info(f"Using {device} for diarization")

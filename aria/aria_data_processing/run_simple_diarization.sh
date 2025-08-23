@@ -73,6 +73,8 @@ echo -e "Input directory: $ARIA_RAW_DIR"
 echo -e "MP4 directory: $ARIA_MP4_DIR"
 echo -e "Output directory: $OUTPUT_DIR"
 
+# Using CUDA for faster processing
+
 python3 "${SCRIPT_DIR}/aria_simple_diarization.py" \
     --input_dir "$ARIA_RAW_DIR" \
     --mp4_dir "$ARIA_MP4_DIR" \
