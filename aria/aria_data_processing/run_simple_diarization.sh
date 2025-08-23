@@ -8,8 +8,8 @@ set -e
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ARIA_RAW_DIR="/mas/robots/prg-aria/raw"
+ARIA_MP4_DIR="/mas/robots/prg-aria/dataset"  # MP4 files directory
 OUTPUT_DIR="/mas/robots/prg-aria/processed_with_speakers"
-TRANSCRIPT_DIR="/mas/robots/prg-aria/transcript"
 
 # Colors for output
 RED='\033[0;31m'
@@ -53,50 +53,58 @@ fi
 HF_TOKEN=$(cat "$HF_TOKEN_FILE")
 echo -e "${GREEN}Found HuggingFace token${NC}"
 
-# Check input directory
+# Check input directories
 if [ ! -d "$ARIA_RAW_DIR" ]; then
     echo -e "${RED}Error: Input directory does not exist: $ARIA_RAW_DIR${NC}"
     exit 1
 fi
 
-# Create output directories
+if [ ! -d "$ARIA_MP4_DIR" ]; then
+    echo -e "${RED}Error: MP4 directory does not exist: $ARIA_MP4_DIR${NC}"
+    exit 1
+fi
+
+# Create output directory
 mkdir -p "$OUTPUT_DIR"
-mkdir -p "$TRANSCRIPT_DIR"
 
 # Run the simple diarization script
 echo -e "${GREEN}Starting simple pyannote.audio diarization...${NC}"
 echo -e "Input directory: $ARIA_RAW_DIR"
+echo -e "MP4 directory: $ARIA_MP4_DIR"
 echo -e "Output directory: $OUTPUT_DIR"
-echo -e "Transcript directory: $TRANSCRIPT_DIR"
 
 python3 "${SCRIPT_DIR}/aria_simple_diarization.py" \
     --input_dir "$ARIA_RAW_DIR" \
+    --mp4_dir "$ARIA_MP4_DIR" \
     --output_dir "$OUTPUT_DIR" \
     --auth_token "$HF_TOKEN"
 
 echo -e "${GREEN}=== Simple Diarization Complete ===${NC}"
-echo -e "Speaker-labeled CSVs saved to: $OUTPUT_DIR"
-echo -e "Transcript CSV saved to: $TRANSCRIPT_DIR"
+echo -e "Results saved to: $OUTPUT_DIR"
 
 # Function to process a single recording
 process_single() {
     if [ -z "$1" ]; then
-        echo -e "${RED}Usage: $0 single <recording_directory>${NC}"
+        echo -e "${RED}Usage: $0 single <recording_name>${NC}"
         exit 1
     fi
     
-    SINGLE_DIR="$1"
+    RECORDING_NAME="$1"
+    SINGLE_DIR="$ARIA_RAW_DIR/$RECORDING_NAME"
+    
     if [ ! -d "$SINGLE_DIR" ]; then
-        echo -e "${RED}Error: Directory does not exist: $SINGLE_DIR${NC}"
+        echo -e "${RED}Error: Recording directory does not exist: $SINGLE_DIR${NC}"
         exit 1
     fi
     
-    echo -e "${GREEN}Processing single recording: $SINGLE_DIR${NC}"
+    echo -e "${GREEN}Processing single recording: $RECORDING_NAME${NC}"
     
     python3 "${SCRIPT_DIR}/aria_simple_diarization.py" \
-        --single_recording "$SINGLE_DIR" \
+        --input_dir "$ARIA_RAW_DIR" \
+        --mp4_dir "$ARIA_MP4_DIR" \
         --output_dir "$OUTPUT_DIR" \
-        --auth_token "$HF_TOKEN"
+        --auth_token "$HF_TOKEN" \
+        --single "$RECORDING_NAME"
 }
 
 # Handle command line arguments
@@ -106,9 +114,12 @@ case "${1:-}" in
         ;;
     "help"|"-h"|"--help")
         echo "Usage:"
-        echo "  $0                    # Process entire dataset"
-        echo "  $0 single <dir>       # Process single recording directory"
-        echo "  $0 help               # Show this help"
+        echo "  $0                         # Process entire dataset"
+        echo "  $0 single <recording_name> # Process single recording"
+        echo "  $0 help                    # Show this help"
+        echo ""
+        echo "Examples:"
+        echo "  $0 single loc1_script2_seq1_rec1"
         ;;
     "")
         # Default: process entire dataset (already done above)
