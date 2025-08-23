@@ -212,16 +212,33 @@ class SimpleAriaDiarization:
                     continue
                     
                 if segment.overlaps(speech_segment):
-                    overlap_duration = segment & speech_segment
-                    if overlap_duration.duration > 0.05:  # At least 50ms overlap
-                        speakers.append((speaker, overlap_duration.duration))
+                    try:
+                        overlap_duration = segment & speech_segment
+                        if overlap_duration and hasattr(overlap_duration, 'duration') and overlap_duration.duration > 0.05:  # At least 50ms overlap
+                            speakers.append((speaker, overlap_duration.duration))
+                    except Exception as e:
+                        logger.warning(f"Error calculating overlap between {segment} and {speech_segment}: {e}")
+                        # Fallback: use simple time overlap calculation
+                        overlap_start = max(segment.start, speech_segment.start)
+                        overlap_end = min(segment.end, speech_segment.end)
+                        overlap_dur = overlap_end - overlap_start
+                        if overlap_dur > 0.05:  # At least 50ms overlap
+                            speakers.append((speaker, overlap_dur))
             
             if speakers:
                 # Assign speaker with longest overlap
                 best_speaker = max(speakers, key=lambda x: x[1])[0]
                 # Convert pyannote speaker names to person_X format
-                speaker_num = best_speaker.replace('SPEAKER_', '')
-                df.at[idx, 'speaker_label'] = f'person_{int(speaker_num) + 1}'
+                try:
+                    if 'SPEAKER_' in str(best_speaker):
+                        speaker_num = str(best_speaker).replace('SPEAKER_', '')
+                        df.at[idx, 'speaker_label'] = f'person_{int(speaker_num) + 1}'
+                    else:
+                        # Handle other speaker label formats
+                        df.at[idx, 'speaker_label'] = f'person_{str(best_speaker)}'
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"Error converting speaker label {best_speaker}: {e}")
+                    df.at[idx, 'speaker_label'] = f'person_{str(best_speaker)}'
             
         # Log speaker distribution
         speaker_counts = df['speaker_label'].value_counts()
