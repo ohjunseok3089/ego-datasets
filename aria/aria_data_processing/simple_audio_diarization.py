@@ -8,6 +8,8 @@ import os
 import sys
 import argparse
 import logging
+import subprocess
+import tempfile
 
 # Set up logging
 logging.basicConfig(
@@ -72,25 +74,83 @@ class SimpleAudioDiarizer:
             traceback.print_exc()
             raise
     
+    def extract_audio_from_video(self, video_path: str) -> str:
+        """
+        Extract audio from video file using ffmpeg
+        
+        Args:
+            video_path: Path to video file
+            
+        Returns:
+            Path to extracted audio file
+        """
+        if not os.path.exists(video_path):
+            logger.error(f"Video file not found: {video_path}")
+            return None
+        
+        try:
+            # Create temporary audio file
+            temp_audio = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
+            temp_audio_path = temp_audio.name
+            temp_audio.close()
+            
+            # FFmpeg command for audio extraction
+            cmd = [
+                "ffmpeg", "-i", video_path,
+                "-vn",  # No video
+                "-acodec", "pcm_s16le",  # PCM 16-bit
+                "-ar", "16000",  # 16kHz sample rate
+                "-ac", "1",  # Mono
+                "-y",  # Overwrite output
+                temp_audio_path
+            ]
+            
+            # Run ffmpeg
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                logger.info(f"Audio extracted successfully to {temp_audio_path}")
+                return temp_audio_path
+            else:
+                logger.error(f"FFmpeg error: {result.stderr}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error extracting audio: {e}")
+            return None
+    
     def diarize_audio(self, audio_path: str, min_speakers: int = 1, max_speakers: int = 2):
         """
         Run diarization on audio file and print results
         
         Args:
-            audio_path: Path to audio file
+            audio_path: Path to audio/video file
             min_speakers: Minimum number of speakers
             max_speakers: Maximum number of speakers
         """
         if not os.path.exists(audio_path):
-            logger.error(f"Audio file not found: {audio_path}")
+            logger.error(f"Audio/video file not found: {audio_path}")
             return
         
+        # Check if it's a video file and extract audio if needed
+        temp_audio_path = None
         try:
-            logger.info(f"Running diarization on {audio_path}")
+            file_ext = os.path.splitext(audio_path)[1].lower()
+            if file_ext in ['.mp4', '.avi', '.mov', '.mkv']:
+                logger.info(f"Detected video file: {audio_path}")
+                temp_audio_path = self.extract_audio_from_video(audio_path)
+                if temp_audio_path is None:
+                    logger.error("Failed to extract audio from video")
+                    return
+                actual_audio_path = temp_audio_path
+            else:
+                actual_audio_path = audio_path
+            
+            logger.info(f"Running diarization on {actual_audio_path}")
             logger.info(f"Speaker constraints: {min_speakers}-{max_speakers} speakers")
             
             # Run the pipeline with speaker constraints
-            diarization = self.pipeline(audio_path, min_speakers=min_speakers, max_speakers=max_speakers)
+            diarization = self.pipeline(actual_audio_path, min_speakers=min_speakers, max_speakers=max_speakers)
             
             # Get statistics
             num_speakers = len(diarization.labels())
@@ -114,6 +174,14 @@ class SimpleAudioDiarizer:
             logger.error(f"Diarization failed: {e}")
             import traceback
             traceback.print_exc()
+        finally:
+            # Clean up temporary audio file
+            if temp_audio_path and os.path.exists(temp_audio_path):
+                try:
+                    os.unlink(temp_audio_path)
+                    logger.info("Cleaned up temporary audio file")
+                except Exception as e:
+                    logger.warning(f"Failed to clean up temporary file: {e}")
 
 
 def main():
