@@ -70,7 +70,7 @@ class AriaDiarization:
             )
             logger.info("Pipeline loaded successfully")
             
-                         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             logger.info(f"Moving pipeline to {device}...")
             self.pipeline.to(device)
             logger.info(f"Using {device} for diarization")
