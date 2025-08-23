@@ -421,7 +421,7 @@ class AriaDiarization:
             
             # Step 6: Generate transcript
             transcript_dir = os.path.join(output_dir, "transcripts")
-            ground_truth_path = "/mas/robots/prg-aria/transcript/ground_truth_transciptions.csv"
+            ground_truth_path = "/mas/robots/prg-aria/transcript/ground_truth_transcriptions_with_frames.csv"
             self.generate_transcript_csv(df_with_speakers, recording_name, transcript_dir, ground_truth_path)
             
             # Clean up temp audio
