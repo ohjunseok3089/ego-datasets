@@ -15,71 +15,67 @@ def analyze_vrs_file(vrs_path):
     
     try:
         # Open VRS file
-        reader = vrs.RecordFileReader(vrs_path)
+        reader = vrs.VRSReader(vrs_path)
         
         print(f"=== VRS File Analysis: {vrs_path} ===")
         print(f"File size: {os.path.getsize(vrs_path):,} bytes")
         
         # Get record count
-        record_count = reader.get_record_count()
+        record_count = reader.n_records
         print(f"Total records: {record_count}")
         
         # Get available stream IDs
-        stream_ids = reader.get_stream_ids()
+        stream_ids = reader.stream_ids
         print(f"Available streams: {stream_ids}")
+        
+        # Get time range
+        min_timestamp = reader.min_timestamp
+        max_timestamp = reader.max_timestamp
+        
+        print(f"\n=== Overall Recording Info ===")
+        print(f"Recording start timestamp: {min_timestamp} ns")
+        print(f"Recording end timestamp: {max_timestamp} ns")
+        print(f"Total duration: {(max_timestamp - min_timestamp) / 1e9:.2f} seconds")
+        
+        # Convert to datetime
+        import datetime
+        start_dt = datetime.datetime.fromtimestamp(min_timestamp / 1e9)
+        end_dt = datetime.datetime.fromtimestamp(max_timestamp / 1e9)
+        print(f"Recording start time: {start_dt}")
+        print(f"Recording end time: {end_dt}")
         
         # Analyze each stream
         for stream_id in stream_ids:
             stream_info = reader.get_stream_info(stream_id)
             print(f"\nStream {stream_id}:")
-            print(f"  - Type: {stream_info}")
+            print(f"  - Info: {stream_info}")
             
-            # Get records for this stream
-            stream_records = reader.get_records_by_stream(stream_id)
-            if stream_records:
-                print(f"  - Record count: {len(stream_records)}")
-                
-                # Check first and last timestamps
-                first_record = stream_records[0]
-                last_record = stream_records[-1]
-                
-                first_timestamp = first_record.timestamp
-                last_timestamp = last_record.timestamp
-                
-                print(f"  - First timestamp: {first_timestamp} ns")
-                print(f"  - Last timestamp: {last_timestamp} ns")
-                print(f"  - Duration: {(last_timestamp - first_timestamp) / 1e9:.2f} seconds")
-                
-                # Convert to human readable
-                import datetime
-                first_dt = datetime.datetime.fromtimestamp(first_timestamp / 1e9)
-                last_dt = datetime.datetime.fromtimestamp(last_timestamp / 1e9)
-                print(f"  - First time: {first_dt}")
-                print(f"  - Last time: {last_dt}")
+            # Get stream tags
+            stream_tags = reader.stream_tags.get(stream_id, {})
+            print(f"  - Tags: {stream_tags}")
+            
+            # Count records for this stream
+            stream_records = 0
+            stream_timestamps = []
+            
+            # Read through records to count this stream
+            reader.read_next_record()  # Reset to beginning
+            while True:
+                try:
+                    record = reader.read_next_record()
+                    if record.stream_id == stream_id:
+                        stream_records += 1
+                        stream_timestamps.append(record.timestamp)
+                except:
+                    break
+            
+            if stream_timestamps:
+                print(f"  - Record count: {stream_records}")
+                print(f"  - First timestamp: {min(stream_timestamps)} ns")
+                print(f"  - Last timestamp: {max(stream_timestamps)} ns")
+                print(f"  - Duration: {(max(stream_timestamps) - min(stream_timestamps)) / 1e9:.2f} seconds")
         
-        # Find minimum timestamp across all streams (recording start time)
-        all_timestamps = []
-        for stream_id in stream_ids:
-            stream_records = reader.get_records_by_stream(stream_id)
-            if stream_records:
-                all_timestamps.extend([r.timestamp for r in stream_records])
-        
-        if all_timestamps:
-            min_timestamp = min(all_timestamps)
-            max_timestamp = max(all_timestamps)
-            
-            print(f"\n=== Overall Recording Info ===")
-            print(f"Recording start timestamp: {min_timestamp} ns")
-            print(f"Recording end timestamp: {max_timestamp} ns")
-            print(f"Total duration: {(max_timestamp - min_timestamp) / 1e9:.2f} seconds")
-            
-            # Convert to datetime
-            start_dt = datetime.datetime.fromtimestamp(min_timestamp / 1e9)
-            end_dt = datetime.datetime.fromtimestamp(max_timestamp / 1e9)
-            print(f"Recording start time: {start_dt}")
-            print(f"Recording end time: {end_dt}")
-            
-            return min_timestamp
+        return min_timestamp
         
     except Exception as e:
         print(f"Error reading VRS file: {e}")
