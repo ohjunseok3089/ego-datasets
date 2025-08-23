@@ -28,54 +28,47 @@ def analyze_vrs_file(vrs_path):
         stream_ids = reader.stream_ids
         print(f"Available streams: {stream_ids}")
         
-        # Get time range
-        min_timestamp = reader.min_timestamp
-        max_timestamp = reader.max_timestamp
+        # Get time range from stream info
+        # Find the actual data timestamps (not configuration/state records)
+        actual_start_timestamp = None
+        actual_end_timestamp = None
+        
+        for stream_id in stream_ids:
+            stream_info = reader.get_stream_info(stream_id)
+            if stream_info['data_records_count'] > 0:
+                data_start = stream_info['first_data_record_timestamp']
+                data_end = stream_info['last_data_record_timestamp']
+                
+                if actual_start_timestamp is None or data_start < actual_start_timestamp:
+                    actual_start_timestamp = data_start
+                if actual_end_timestamp is None or data_end > actual_end_timestamp:
+                    actual_end_timestamp = data_end
         
         print(f"\n=== Overall Recording Info ===")
-        print(f"Recording start timestamp: {min_timestamp} ns")
-        print(f"Recording end timestamp: {max_timestamp} ns")
-        print(f"Total duration: {(max_timestamp - min_timestamp) / 1e9:.2f} seconds")
+        print(f"Recording start timestamp: {actual_start_timestamp} ns")
+        print(f"Recording end timestamp: {actual_end_timestamp} ns")
+        print(f"Total duration: {(actual_end_timestamp - actual_start_timestamp) / 1e9:.2f} seconds")
         
         # Convert to datetime
         import datetime
-        start_dt = datetime.datetime.fromtimestamp(min_timestamp / 1e9)
-        end_dt = datetime.datetime.fromtimestamp(max_timestamp / 1e9)
+        start_dt = datetime.datetime.fromtimestamp(actual_start_timestamp / 1e9)
+        end_dt = datetime.datetime.fromtimestamp(actual_end_timestamp / 1e9)
         print(f"Recording start time: {start_dt}")
         print(f"Recording end time: {end_dt}")
+        
+        return actual_start_timestamp
         
         # Analyze each stream
         for stream_id in stream_ids:
             stream_info = reader.get_stream_info(stream_id)
             print(f"\nStream {stream_id}:")
-            print(f"  - Info: {stream_info}")
+            print(f"  - Device: {stream_info.get('device_name', 'Unknown')}")
+            print(f"  - Data records: {stream_info.get('data_records_count', 0)}")
             
-            # Get stream tags
-            stream_tags = reader.stream_tags.get(stream_id, {})
-            print(f"  - Tags: {stream_tags}")
-            
-            # Count records for this stream
-            stream_records = 0
-            stream_timestamps = []
-            
-            # Read through records to count this stream
-            reader.read_next_record()  # Reset to beginning
-            while True:
-                try:
-                    record = reader.read_next_record()
-                    if record.stream_id == stream_id:
-                        stream_records += 1
-                        stream_timestamps.append(record.timestamp)
-                except:
-                    break
-            
-            if stream_timestamps:
-                print(f"  - Record count: {stream_records}")
-                print(f"  - First timestamp: {min(stream_timestamps)} ns")
-                print(f"  - Last timestamp: {max(stream_timestamps)} ns")
-                print(f"  - Duration: {(max(stream_timestamps) - min(stream_timestamps)) / 1e9:.2f} seconds")
-        
-        return min_timestamp
+            if stream_info.get('data_records_count', 0) > 0:
+                print(f"  - Data start: {stream_info['first_data_record_timestamp']:.6f} ns")
+                print(f"  - Data end: {stream_info['last_data_record_timestamp']:.6f} ns")
+                print(f"  - Duration: {(stream_info['last_data_record_timestamp'] - stream_info['first_data_record_timestamp']) / 1e9:.2f} seconds")
         
     except Exception as e:
         print(f"Error reading VRS file: {e}")
