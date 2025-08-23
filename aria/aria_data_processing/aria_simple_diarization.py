@@ -201,29 +201,47 @@ class SimpleAriaDiarization:
             segment = Segment(start_time, end_time)
             speakers = []
             
-            # Handle different return formats from pyannote itertracks
-            for track_info in diarization.itertracks(yield_label=True):
-                if len(track_info) == 3:
-                    speech_segment, _, speaker = track_info
-                elif len(track_info) == 2:
-                    speech_segment, speaker = track_info
-                else:
-                    logger.warning(f"Unexpected track info format: {track_info}")
-                    continue
-                    
-                if segment.overlaps(speech_segment):
-                    try:
-                        overlap_duration = segment & speech_segment
-                        if overlap_duration and hasattr(overlap_duration, 'duration') and overlap_duration.duration > 0.05:  # At least 50ms overlap
-                            speakers.append((speaker, overlap_duration.duration))
-                    except Exception as e:
-                        logger.warning(f"Error calculating overlap between {segment} and {speech_segment}: {e}")
-                        # Fallback: use simple time overlap calculation
+            # Iterate through diarization results with flexible unpacking
+            for track_data in diarization.itertracks(yield_label=True):
+                try:
+                    # Handle both 2-tuple and 3-tuple returns
+                    if len(track_data) == 3:
+                        turn, _, speaker = track_data
+                        speech_segment = turn
+                    elif len(track_data) == 2:
+                        turn, speaker = track_data  
+                        speech_segment = turn
+                    else:
+                        logger.warning(f"Unexpected diarization format: {len(track_data)} items")
+                        continue
+                        
+                    # Check for overlap using safe methods
+                    if hasattr(segment, 'overlaps') and hasattr(speech_segment, 'start') and hasattr(speech_segment, 'end'):
+                        # Use manual overlap check to avoid pyannote comparison issues
                         overlap_start = max(segment.start, speech_segment.start)
                         overlap_end = min(segment.end, speech_segment.end)
-                        overlap_dur = overlap_end - overlap_start
-                        if overlap_dur > 0.05:  # At least 50ms overlap
-                            speakers.append((speaker, overlap_dur))
+                        
+                        if overlap_end > overlap_start:  # There is overlap
+                            overlap_dur = overlap_end - overlap_start
+                            if overlap_dur > 0.05:  # At least 50ms overlap
+                                speakers.append((speaker, overlap_dur))
+                    else:
+                        logger.warning(f"Segment or speech_segment missing required attributes: {segment}, {speech_segment}")
+                        
+                except Exception as e:
+                    logger.warning(f"Error processing track data {track_data}: {e}")
+                    # Try basic time-based overlap as fallback if we can extract basic info
+                    try:
+                        if len(track_data) >= 2:
+                            turn = track_data[0] 
+                            speaker = track_data[-1]  # last item should be speaker
+                            overlap_start = max(float(segment.start), float(turn.start))
+                            overlap_end = min(float(segment.end), float(turn.end))
+                            overlap_dur = overlap_end - overlap_start
+                            if overlap_dur > 0.05:  # At least 50ms overlap
+                                speakers.append((speaker, overlap_dur))
+                    except Exception as e2:
+                        logger.error(f"Fallback overlap calculation also failed: {e2}")
             
             if speakers:
                 # Assign speaker with longest overlap
@@ -335,7 +353,13 @@ class SimpleAriaDiarization:
             return False
         
         # Assign speakers based on diarization
-        df_with_speakers = self.assign_speakers_from_diarization(df, diarization)
+        try:
+            df_with_speakers = self.assign_speakers_from_diarization(df, diarization)
+        except Exception as e:
+            logger.error(f"Speaker assignment failed for {recording_name}: {e}")
+            # Continue with original dataframe but mark all as unknown
+            df['speaker_label'] = 'person_unknown'
+            df_with_speakers = df
         
         # Save updated CSV
         df_with_speakers.to_csv(output_csv_path, index=False)
