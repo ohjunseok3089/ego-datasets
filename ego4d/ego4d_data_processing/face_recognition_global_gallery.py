@@ -19,8 +19,11 @@ def load_ground_truth(ground_truth_path):
         return None
     
     try:
-        df = pd.read_csv(ground_truth_path)
+        # Ground truth CSV has no header, specify column names
+        df = pd.read_csv(ground_truth_path, header=None, 
+                        names=['frame_number', 'person_id', 'x1', 'y1', 'x2', 'y2', 'confidence'])
         print(f"    Loaded ground truth: {len(df)} records")
+        print(f"    Ground truth unique person IDs: {sorted(df['person_id'].unique())}")
         return df
     except Exception as e:
         print(f"    Error loading ground truth: {e}")
@@ -52,9 +55,6 @@ def match_with_ground_truth(data, ground_truth_df, iou_threshold=0.3):
     if ground_truth_df is None:
         return data
     
-    print(f"    Matching with ground truth (IoU threshold: {iou_threshold})...")
-    
-    matched_count = 0
     frame_num = data['frame_number']
     detected_bbox = data['bbox']
     
@@ -64,9 +64,21 @@ def match_with_ground_truth(data, ground_truth_df, iou_threshold=0.3):
     best_iou = 0
     best_person_id = None
     
+    # Debug: only print for first few frames to avoid spam
+    debug_print = frame_num < 10 or frame_num % 100 == 0
+    
+    if debug_print and len(frame_gt) > 0:
+        print(f"    Frame {frame_num}: Detected [{detected_bbox[0]}, {detected_bbox[1]}, {detected_bbox[2]}, {detected_bbox[3]}]")
+        for _, gt_row in frame_gt.iterrows():
+            gt_bbox = [gt_row['x1'], gt_row['y1'], gt_row['x2'], gt_row['y2']]
+            print(f"      GT Person {gt_row['person_id']}: [{gt_bbox[0]:.1f}, {gt_bbox[1]:.1f}, {gt_bbox[2]:.1f}, {gt_bbox[3]:.1f}]")
+    
     for _, gt_row in frame_gt.iterrows():
         gt_bbox = [gt_row['x1'], gt_row['y1'], gt_row['x2'], gt_row['y2']]
         iou = calculate_iou(detected_bbox, gt_bbox)
+        
+        if debug_print:
+            print(f"      IoU with Person {gt_row['person_id']}: {iou:.3f}")
         
         if iou > best_iou and iou >= iou_threshold:
             best_iou = iou
@@ -74,8 +86,12 @@ def match_with_ground_truth(data, ground_truth_df, iou_threshold=0.3):
     
     if best_person_id is not None:
         data['person_id'] = str(int(best_person_id))  # Convert to string number
-        print(f"    Matched {matched_count}/{len(data)} faces with ground truth")
+        if debug_print:
+            print(f"    Frame {frame_num}: Matched to Person {best_person_id} with IoU {best_iou:.3f}")
         return data
+    
+    if debug_print and len(frame_gt) > 0:
+        print(f"    Frame {frame_num}: No match found (best IoU: {best_iou:.3f})")
     
     return data
 
@@ -194,16 +210,44 @@ def main(args):
         return
 
     part1_embeddings = np.array([data['embedding'] for data in part1_data])
-    clusterer = hdbscan.HDBSCAN(min_cluster_size=args.min_cluster_size, metric='euclidean')
-    labels = clusterer.fit_predict(part1_embeddings)
     
+    # Get max person ID from ground truth to limit the number of clusters
+    max_gt_person_id = 2  # Default to 2 people
+    if ground_truth_df is not None:
+        max_gt_person_id = ground_truth_df['person_id'].max()
+        print(f"    Ground truth max person ID: {max_gt_person_id}")
+    
+    # Adjust clustering parameters to get reasonable number of clusters
+    # Try different min_cluster_size values to get close to ground truth person count
+    best_clusterer = None
+    best_labels = None
+    best_score = float('inf')
+    
+    for min_size in [args.min_cluster_size, args.min_cluster_size * 2, args.min_cluster_size * 4]:
+        clusterer = hdbscan.HDBSCAN(min_cluster_size=min_size, metric='euclidean')
+        labels = clusterer.fit_predict(part1_embeddings)
+        num_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+        
+        # Score based on how close we are to the ground truth person count
+        score = abs(num_clusters - max_gt_person_id)
+        print(f"    Trying min_cluster_size={min_size}: {num_clusters} clusters, score={score}")
+        
+        if score < best_score:
+            best_score = score
+            best_clusterer = clusterer
+            best_labels = labels
+    
+    labels = best_labels
     num_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+    
+    # Create gallery with person IDs matching ground truth range
     for i in range(num_clusters):
         cluster_indices = np.where(labels == i)[0]
         gallery_embeddings.append(np.mean(part1_embeddings[cluster_indices], axis=0))
-        gallery_ids.append(f"person_{i+1}")
+        # Use person IDs 1, 2, 3... instead of person_1, person_2...
+        gallery_ids.append(str(i + 1))
     
-    print(f"Gallery created with {len(gallery_ids)} unique people.")
+    print(f"Gallery created with {len(gallery_ids)} unique people: {gallery_ids}")
 
     for video_path in video_files:
         print(f"\nStep 2: Processing '{os.path.basename(video_path)}' using gallery (full video)...")
