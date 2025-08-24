@@ -47,7 +47,7 @@ fi
 
 echo "Found $num_videos video files to process."
 
-# Step 2: Distribute the groups across the available GPUs
+# Step 2: Distribute the videos across the available GPUs
 declare -a gpu_jobs
 for ((i=0; i<NUM_GPUS; i++)); do
     gpu_jobs[$i]=""
@@ -85,17 +85,18 @@ for ((gpu=0; gpu<NUM_GPUS; gpu++)); do
     echo "export LD_LIBRARY_PATH=$CUDA_LIB_PATH:\$LD_LIBRARY_PATH" >> "$temp_script"
     # -------------------------------------------
 
-    echo "IFS=';' read -ra patterns_to_process <<< \"$job_list\"" >> "$temp_script"
-    echo "for pattern in \"\${patterns_to_process[@]}\"; do" >> "$temp_script"
-    echo "    if [ -n \"\$pattern\" ]; then" >> "$temp_script"
+    echo "IFS=';' read -ra videos_to_process <<< \"$job_list\"" >> "$temp_script"
+    echo "for video_path in \"\${videos_to_process[@]}\"; do" >> "$temp_script"
+    echo "    if [ -n \"\$video_path\" ]; then" >> "$temp_script"
     echo "        echo \"[GPU $gpu] --------------------------------------------------\"" >> "$temp_script"
-    echo "        echo \"[GPU $gpu] Processing group: \$pattern\"" >> "$temp_script"
+    echo "        echo \"[GPU $gpu] Processing video: \$video_path\"" >> "$temp_script"
     echo "        CUDA_VISIBLE_DEVICES=$gpu python face_recognition_global_gallery.py \\" >> "$temp_script"
-    echo "            --search_path \"$BASE_DIR\" \\" >> "$temp_script"
-    echo "            --pattern_to_match \"\$pattern\" \\" >> "$temp_script"
-    echo "            --output_dir \"$OUTPUT_DIR\"" >> "$temp_script"
+    echo "            --video_path \"\$video_path\" \\" >> "$temp_script"
     if [ -n "$GROUND_TRUTH_DIR" ]; then
+        echo "            --output_dir \"$OUTPUT_DIR\" \\" >> "$temp_script"
         echo "            --ground_truth_dir \"$GROUND_TRUTH_DIR\"" >> "$temp_script"
+    else
+        echo "            --output_dir \"$OUTPUT_DIR\"" >> "$temp_script"
     fi
     echo "    fi" >> "$temp_script"
     echo "done" >> "$temp_script"
@@ -110,5 +111,5 @@ done
 echo "============================================="
 echo "All processing jobs launched!"
 echo "Use 'screen -ls' to see running sessions."
-echo "Attach with 'screen -r $session_name' to monitor a specific GPU."
+echo "Attach with 'screen -r face_rec_gpu0' to monitor a specific GPU."
 echo "Output files will be saved in: $OUTPUT_DIR/"

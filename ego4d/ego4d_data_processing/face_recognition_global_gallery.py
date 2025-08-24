@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+import pandas as pd
 import insightface
 from insightface.app import FaceAnalysis
 import hdbscan
@@ -85,11 +86,13 @@ def extract_embeddings(video_path, model, max_frames=None, ground_truth_df=None)
         print(f"    Error: Could not open {video_path}")
         return []
     
-    if max_frames == "MAX":
-        max_frames = 1e9 # infinity
-    # Set maximum frames limit (20 minutes * 30 fps)
+    # Set maximum frames limit
     if max_frames is None:
-        max_frames = 20 * 30 * 60  # 36000 frames for 20 minutes at 30fps
+        # No limit - process entire video
+        max_frames = float('inf')
+    elif max_frames == "MAX":
+        max_frames = float('inf')
+    # Otherwise use the specified limit (default: 36000 for 20 minutes at 30fps)
     
     face_data = []
     frame_number = 0
@@ -160,29 +163,28 @@ def main(args):
     app = FaceAnalysis(name='buffalo_l', providers=[args.execution_provider])
     app.prepare(ctx_id=0, det_size=(640, 640))
     
-    try:
-        search_pattern = os.path.join(args.search_path, '*.MP4')
-        all_mp4_files = glob.glob(search_pattern)
-        video_files = sorted([f for f in all_mp4_files if args.pattern_to_match in os.path.basename(f)])
-        if not video_files:
-            print(f"Error: No video files found in '{args.search_path}' containing the pattern '{args.pattern_to_match}'")
-            return
-        print(f"\nFound {len(video_files)} matching video files for pattern '{args.pattern_to_match}':")
-        for f in video_files: print(f"  - {os.path.basename(f)}")
-    except Exception as e:
-        print(f"Error finding video files: {e}")
+    # Check if the video file exists
+    if not os.path.exists(args.video_path):
+        print(f"Error: Video file '{args.video_path}' does not exist!")
         return
+    
+    # For single video, use it as both gallery source and target
+    video_files = [args.video_path]
+    
+    print(f"\nProcessing single video file: {os.path.basename(args.video_path)}")
 
     print("\n--- Creating Global Gallery ---")
     start_time = time.time()
     
+    # Load ground truth if available
     ground_truth_df = None
     if args.ground_truth_dir:
         video_basename = os.path.splitext(os.path.basename(args.video_path))[0]
         ground_truth_path = os.path.join(args.ground_truth_dir, f"{video_basename}.csv")
         ground_truth_df = load_ground_truth(ground_truth_path)
+    
     first_video_path = video_files[0]
-    print(f"Step 1: Creating gallery from '{os.path.basename(first_video_path)}'...")
+    print(f"Step 1: Creating gallery from '{os.path.basename(first_video_path)}' (20 minute limit)...")
     part1_data = extract_embeddings(first_video_path, app, max_frames=args.max_frames, ground_truth_df=ground_truth_df)
     
     gallery_embeddings = []
@@ -204,8 +206,8 @@ def main(args):
     print(f"Gallery created with {len(gallery_ids)} unique people.")
 
     for video_path in video_files:
-        print(f"\nStep 2: Processing '{os.path.basename(video_path)}' using gallery...")
-        video_data = extract_embeddings(video_path, app, max_frames="MAX")
+        print(f"\nStep 2: Processing '{os.path.basename(video_path)}' using gallery (full video)...")
+        video_data = extract_embeddings(video_path, app, max_frames=None, ground_truth_df=ground_truth_df)  # No limit for Part 2
         if not video_data: continue
 
         for data in video_data:
@@ -223,15 +225,14 @@ def main(args):
         save_outputs(video_path, video_data, args.output_dir)
 
     end_time = time.time()
-    print(f"\nFinished processing group '{args.pattern_to_match}' in {end_time - start_time:.2f} seconds.")
+    print(f"\nFinished processing '{os.path.basename(args.video_path)}' in {end_time - start_time:.2f} seconds.")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Face recognition using a global gallery created from the first video of a group.")
-    parser.add_argument('--search_path', type=str, required=True, help="Directory path to search for videos.")
-    parser.add_argument('--pattern_to_match', type=str, required=True, help="Unique pattern to identify a group of videos (e.g., 'day_1__con_1__person_1').")
+    parser = argparse.ArgumentParser(description="Face recognition for a single video file.")
+    parser.add_argument('--video_path', type=str, required=True, help="Path to the video file to process.")
     parser.add_argument('--output_dir', type=str, default="processed_videos", help="Directory to save output files.")
-    parser.add_argument('--min_cluster_size', type=int, default=75, help="Minimum cluster size for HDBSCAN.")
+    parser.add_argument('--min_cluster_size', type=int, default=5, help="Minimum cluster size for HDBSCAN.")
     parser.add_argument('--recognition_threshold', type=float, default=0.8, help="Cosine distance threshold for recognition.")
     parser.add_argument('--execution_provider', type=str, default='CUDAExecutionProvider', help="Execution provider for ONNX Runtime (e.g., 'CoreMLExecutionProvider', 'CUDAExecutionProvider', 'CPUExecutionProvider').")
     parser.add_argument('--ground_truth_dir', type=str, help="Directory containing ground truth CSV files (optional).")
