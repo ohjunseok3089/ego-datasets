@@ -245,7 +245,7 @@ class AriaDiarization:
         try:
             logger.info(f"Running diarization on {audio_path}")
             
-            # Run the pipeline with speaker constraints (fixed to 2 speakers for better accuracy)
+            # Run the pipeline with speaker constraints (allow 1-2 speakers for flexibility)
             diarization = self.pipeline(audio_path, min_speakers=2, max_speakers=2)
             
             # Get statistics
@@ -383,8 +383,8 @@ class AriaDiarization:
         
         logger.info(f"Assigning {len(diarization.labels())} speakers to {len(df)} segments")
         
-        # Merge diarization to reduce fragmentation
-        diar_merged = self.merge_diarization(diarization, gap=0.15)
+        # Use original diarization (no merging) for more conservative approach
+        diar_merged = diarization
         
         prev_speaker = None
         prev_end = None
@@ -392,7 +392,7 @@ class AriaDiarization:
         for idx, row in df.iterrows():
             s = float(row['start_sec_normalized'])
             e = float(row['end_sec_normalized'])
-            seg = Segment(max(0.0, s - pad), e + pad)
+            seg = Segment(s, e)  # No padding for more conservative approach
             
             # Calculate overlap by speaker (sum multiple segments from same speaker)
             from collections import defaultdict
@@ -407,30 +407,7 @@ class AriaDiarization:
             if by_spk:
                 # Choose speaker with maximum total overlap
                 chosen_spk = max(by_spk.items(), key=lambda x: x[1])[0]
-            else:
-                # Carry forward previous speaker
-                if prev_speaker is not None and prev_end is not None and (s - prev_end) <= carry_forward_within:
-                    df.at[idx, 'speaker_label'] = prev_speaker
-                    prev_end = e
-                    continue
-                
-                # Find nearest diarization segment
-                mid = 0.5 * (s + e)
-                nearest_spk = None
-                nearest_dist = 1e9
-                
-                for spk_seg, _, spk in diar_merged.itertracks(yield_label=True):
-                    if spk_seg.start <= mid <= spk_seg.end:
-                        nearest_dist = 0.0
-                        nearest_spk = spk
-                        break
-                    dist = min(abs(mid - spk_seg.start), abs(mid - spk_seg.end))
-                    if dist < nearest_dist:
-                        nearest_dist = dist
-                        nearest_spk = spk
-                
-                if nearest_spk is not None and nearest_dist <= nearest_within:
-                    chosen_spk = nearest_spk
+            # Remove carry-forward and nearest segment logic for more conservative approach
             
             if chosen_spk is not None:
                 label = self._personify(chosen_spk)
@@ -582,17 +559,7 @@ class AriaDiarization:
                 logger.error("Diarization failed")
                 return False
             
-            # Step 4: Estimate global time offset and apply correction
-            try:
-                off = self.estimate_time_offset(df, diarization, search_range=(-0.6, 0.6, 0.01))
-                if abs(off) >= 0.03:  # Only apply if offset is significant
-                    logger.info(f"Applying global time offset {off:+.3f}s to transcript timestamps")
-                    df['start_sec_normalized'] = df['start_sec_normalized'] + off
-                    df['end_sec_normalized'] = df['end_sec_normalized'] + off
-            except Exception as e:
-                logger.warning(f"Offset estimation failed: {e}")
-            
-            # Step 5: Assign speakers with improved logic
+            # Step 4: Assign speakers with improved logic (but more conservative)
             df_with_speakers = self.assign_speakers_to_segments(df, diarization)
             
             # Step 5: Save results
