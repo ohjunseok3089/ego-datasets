@@ -34,13 +34,46 @@ def calculate_iou(box1, box2):
     return iou
 
 # Test with actual coordinates from frame 498
-gt_box = [2.0, 131.1, 412.5, 587.2]
-detected_box = [37, 426, 152, 573]
+# Original GT: frame_number,person_id,x1,y1,x2,y2,confidence -> 498,1,1.99,131.06,412.5,587.2,1
+original_gt = [2.0, 131.1, 412.5, 587.2]  # [x1, y1, x2, y2] 
+detected_box = [37, 426, 152, 573]        # [x1, y1, x2, y2]
 
 print("=== Frame 498 IoU Calculation ===")
-iou = calculate_iou(gt_box, detected_box)
+print("Original interpretation:")
+iou1 = calculate_iou(original_gt, detected_box)
 
-print(f"\nFinal IoU: {iou:.4f}")
-print(f"Would match with threshold 0.3? {iou >= 0.3}")
-print(f"Would match with threshold 0.1? {iou >= 0.1}")
-print(f"Would match with threshold 0.05? {iou >= 0.05}")
+print(f"\nFinal IoU (original): {iou1:.4f}")
+
+# Try different coordinate order interpretations
+print("\n" + "="*50)
+print("Trying different GT coordinate orders:")
+
+# Maybe GT is [y1, x1, y2, x2]?
+gt_swapped1 = [131.1, 2.0, 587.2, 412.5]  # [y1, x1, y2, x2]
+print(f"\nGT as [y1, x1, y2, x2]: {gt_swapped1}")
+iou2 = calculate_iou(gt_swapped1, detected_box)
+print(f"IoU: {iou2:.4f}")
+
+# Maybe GT is [x1, x2, y1, y2]?
+gt_swapped2 = [2.0, 412.5, 131.1, 587.2]  # [x1, x2, y1, y2] 
+print(f"\nGT as [x1, x2, y1, y2]: {gt_swapped2}")
+iou3 = calculate_iou(gt_swapped2, detected_box)
+print(f"IoU: {iou3:.4f}")
+
+# Maybe GT is [y1, y2, x1, x2]?
+gt_swapped3 = [131.1, 587.2, 2.0, 412.5]  # [y1, y2, x1, x2]
+print(f"\nGT as [y1, y2, x1, x2]: {gt_swapped3}")
+iou4 = calculate_iou(gt_swapped3, detected_box)
+print(f"IoU: {iou4:.4f}")
+
+print(f"\n" + "="*50)
+print("SUMMARY:")
+print(f"Original [x1, y1, x2, y2]: IoU = {iou1:.4f}")
+print(f"Swapped  [y1, x1, y2, x2]: IoU = {iou2:.4f}")
+print(f"Swapped  [x1, x2, y1, y2]: IoU = {iou3:.4f}")
+print(f"Swapped  [y1, y2, x1, x2]: IoU = {iou4:.4f}")
+
+best_iou = max(iou1, iou2, iou3, iou4)
+print(f"\nBest IoU: {best_iou:.4f}")
+print(f"Would match with threshold 0.3? {best_iou >= 0.3}")
+print(f"Would match with threshold 0.1? {best_iou >= 0.1}")
