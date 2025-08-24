@@ -19,9 +19,19 @@ def load_ground_truth(ground_truth_path):
         return None
     
     try:
-        # Ground truth CSV has no header, specify column names
+        # Ground truth CSV has no header, column order is: frame_number,person_id,x1,x2,y1,y2,confidence
         df = pd.read_csv(ground_truth_path, header=None, 
-                        names=['frame_number', 'person_id', 'x1', 'y1', 'x2', 'y2', 'confidence'])
+                        names=['frame_number', 'person_id', 'x1_raw', 'x2_raw', 'y1_raw', 'y2_raw', 'confidence'])
+        
+        # Reorder coordinates from [x1,x2,y1,y2] to [x1,y1,x2,y2] format
+        df['x1'] = df['x1_raw']
+        df['y1'] = df['y1_raw'] 
+        df['x2'] = df['x2_raw']
+        df['y2'] = df['y2_raw']
+        
+        # Drop the raw columns
+        df = df.drop(['x1_raw', 'x2_raw', 'y1_raw', 'y2_raw'], axis=1)
+        
         print(f"    Loaded ground truth: {len(df)} records")
         print(f"    Ground truth unique person IDs: {sorted(df['person_id'].unique())}")
         return df
@@ -123,7 +133,7 @@ def extract_embeddings(video_path, model, max_frames=None, ground_truth_df=None)
                 'bbox': face.bbox.astype(int),
                 'embedding': face.normed_embedding
             }
-            iter_face_data = match_with_ground_truth(iter_face_data, ground_truth_df, iou_threshold=0.1)
+            iter_face_data = match_with_ground_truth(iter_face_data, ground_truth_df, iou_threshold=0.3)
             face_data.append(iter_face_data)
         frame_number += 1
     cap.release()
