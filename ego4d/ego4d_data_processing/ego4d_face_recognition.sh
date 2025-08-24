@@ -32,14 +32,9 @@ mkdir -p "$OUTPUT_DIR"
 declare -A video_groups
 echo "Grouping video files..."
 
-for f in "$BASE_DIR"/*.MP4; do
+for f in "$BASE_DIR"/*.mp4; do
     if [ -f "$f" ]; then
-        filename=$(basename "$f")
-        pattern=$(echo "$filename" | sed -E 's/vid_[0-9]+__(.*)_part[0-9]+\.MP4/\1/')
-        # pattern=$(echo "$filename" | sed -E 's/vid_[0-9]+__(.*)\.MP4/\1/')
-        if [[ -n "$pattern" && "$pattern" != "$filename" ]]; then
-            video_groups["$pattern"]+="$f "
-        fi
+        video_files+=("$f")
     fi
 done
 
