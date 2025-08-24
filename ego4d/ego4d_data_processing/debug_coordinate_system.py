@@ -10,6 +10,11 @@ def analyze_coordinate_systems(video_path, gt_file, output_file):
     # Load files
     gt_df = pd.read_csv(gt_file, header=None, 
                        names=['frame_number', 'person_id', 'x1', 'y1', 'x2', 'y2', 'confidence'])
+    
+    # Convert coordinate columns to numeric
+    for col in ['frame_number', 'x1', 'y1', 'x2', 'y2']:
+        gt_df[col] = pd.to_numeric(gt_df[col], errors='coerce')
+    
     output_df = pd.read_csv(output_file)
     
     # Get video properties
