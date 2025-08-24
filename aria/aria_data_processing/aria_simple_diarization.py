@@ -245,8 +245,8 @@ class AriaDiarization:
         try:
             logger.info(f"Running diarization on {audio_path}")
             
-            # Run the pipeline with speaker constraints
-            diarization = self.pipeline(audio_path, min_speakers=1, max_speakers=2)
+            # Run the pipeline with speaker constraints (fixed to 2 speakers for better accuracy)
+            diarization = self.pipeline(audio_path, min_speakers=2, max_speakers=2)
             
             # Get statistics
             num_speakers = len(diarization.labels())
@@ -269,18 +269,112 @@ class AriaDiarization:
             logger.error(f"Diarization failed: {e}")
             return None
     
-    def assign_speakers_to_segments(self, df: pd.DataFrame, diarization: Annotation) -> pd.DataFrame:
+    def merge_diarization(self, diarization: Annotation, gap: float = 0.15) -> Annotation:
         """
-        Assign speaker labels to transcript segments based on diarization
+        Merge adjacent segments from the same speaker with small gaps
+        
+        Args:
+            diarization: Pyannote diarization results
+            gap: Maximum gap to merge (seconds)
+            
+        Returns:
+            Merged diarization annotation
+        """
+        merged = Annotation()
+        
+        for spk in diarization.labels():
+            tracks = []
+            for seg, _, label in diarization.itertracks(yield_label=True):
+                if label == spk:
+                    tracks.append((seg.start, seg.end))
+            
+            if not tracks:
+                continue
+                
+            tracks.sort()
+            cur_s, cur_e = tracks[0]
+            
+            for s, e in tracks[1:]:
+                if s - cur_e <= gap:
+                    cur_e = max(cur_e, e)
+                else:
+                    merged[Segment(cur_s, cur_e)] = spk
+                    cur_s, cur_e = s, e
+            
+            merged[Segment(cur_s, cur_e)] = spk
+        
+        logger.info(f"Merged diarization: {len(diarization.labels())} speakers, {len(list(diarization.itertracks()))} -> {len(list(merged.itertracks()))} segments")
+        return merged
+    
+    def estimate_time_offset(self, df: pd.DataFrame, diarization: Annotation,
+                           search_range=(-0.6, 0.6, 0.01), use_rows: int = 200) -> float:
+        """
+        Estimate global time offset between transcript and diarization
         
         Args:
             df: DataFrame with transcript segments
             diarization: Pyannote diarization results
+            search_range: (min_offset, max_offset, step) in seconds
+            use_rows: Number of rows to use for estimation
+            
+        Returns:
+            Estimated offset in seconds
+        """
+        diar_tracks = [(seg.start, seg.end) for seg, _, _ in diarization.itertracks(yield_label=True)]
+        if not diar_tracks:
+            return 0.0
+        
+        import numpy as np
+        rows = df.head(use_rows)
+        offsets = np.arange(search_range[0], search_range[1] + 1e-9, search_range[2])
+        best_off, best_score = 0.0, -1.0
+        
+        for off in offsets:
+            score = 0.0
+            for _, r in rows.iterrows():
+                s = float(r['start_sec_normalized']) + off
+                e = float(r['end_sec_normalized']) + off
+                for ds, de in diar_tracks:
+                    # Pure speech activity overlap (ignore speaker)
+                    overlap = max(0.0, min(e, de) - max(s, ds))
+                    score += overlap
+            
+            if score > best_score:
+                best_score, best_off = score, off
+        
+        logger.info(f"Estimated time offset: {best_off:.3f}s (score: {best_score:.2f})")
+        return best_off
+    
+    def _personify(self, spk):
+        """Convert speaker ID to person_X format"""
+        if isinstance(spk, str) and 'SPEAKER_' in spk:
+            try:
+                n = int(spk.replace('SPEAKER_', '')) + 1
+                return f'person_{n}'
+            except Exception:
+                return f'person_{spk}'
+        if isinstance(spk, (int, np.integer)):
+            return f'person_{int(spk)}'
+        return 'person_unknown'
+    
+    def assign_speakers_to_segments(self, df: pd.DataFrame, diarization: Annotation,
+                                  pad: float = 0.12,
+                                  carry_forward_within: float = 0.5,
+                                  nearest_within: float = 0.6) -> pd.DataFrame:
+        """
+        Assign speaker labels to transcript segments with improved logic
+        
+        Args:
+            df: DataFrame with transcript segments
+            diarization: Pyannote diarization results
+            pad: Padding for overlap calculation (seconds)
+            carry_forward_within: Maximum gap for carrying forward previous speaker (seconds)
+            nearest_within: Maximum distance for nearest segment assignment (seconds)
             
         Returns:
             DataFrame with added speaker_label column
         """
-        # Initialize speaker column
+        df = df.copy()
         df['speaker_label'] = 'person_unknown'
         
         if not diarization or len(diarization.labels()) == 0:
@@ -289,34 +383,62 @@ class AriaDiarization:
         
         logger.info(f"Assigning {len(diarization.labels())} speakers to {len(df)} segments")
         
-        # Process each transcript segment
+        # Merge diarization to reduce fragmentation
+        diar_merged = self.merge_diarization(diarization, gap=0.15)
+        
+        prev_speaker = None
+        prev_end = None
+        
         for idx, row in df.iterrows():
-            start_time = row['start_sec_normalized']
-            end_time = row['end_sec_normalized']
-            segment = Segment(start_time, end_time)
+            s = float(row['start_sec_normalized'])
+            e = float(row['end_sec_normalized'])
+            seg = Segment(max(0.0, s - pad), e + pad)
             
-            # Find overlapping speakers
-            overlaps = []
+            # Calculate overlap by speaker (sum multiple segments from same speaker)
+            from collections import defaultdict
+            by_spk = defaultdict(float)
             
-            for speaker_segment, _, speaker in diarization.itertracks(yield_label=True):
-                # Calculate overlap
-                overlap_start = max(segment.start, speaker_segment.start)
-                overlap_end = min(segment.end, speaker_segment.end)
-                overlap_duration = max(0, overlap_end - overlap_start)
+            for spk_seg, _, spk in diar_merged.itertracks(yield_label=True):
+                ov = max(0.0, min(seg.end, spk_seg.end) - max(seg.start, spk_seg.start))
+                if ov > 0.0:
+                    by_spk[spk] += ov
+            
+            chosen_spk = None
+            if by_spk:
+                # Choose speaker with maximum total overlap
+                chosen_spk = max(by_spk.items(), key=lambda x: x[1])[0]
+            else:
+                # Carry forward previous speaker
+                if prev_speaker is not None and prev_end is not None and (s - prev_end) <= carry_forward_within:
+                    df.at[idx, 'speaker_label'] = prev_speaker
+                    prev_end = e
+                    continue
                 
-                # Minimum 20ms overlap required (more lenient)
-                if overlap_duration > 0.02:
-                    overlaps.append((speaker, overlap_duration))
+                # Find nearest diarization segment
+                mid = 0.5 * (s + e)
+                nearest_spk = None
+                nearest_dist = 1e9
+                
+                for spk_seg, _, spk in diar_merged.itertracks(yield_label=True):
+                    if spk_seg.start <= mid <= spk_seg.end:
+                        nearest_dist = 0.0
+                        nearest_spk = spk
+                        break
+                    dist = min(abs(mid - spk_seg.start), abs(mid - spk_seg.end))
+                    if dist < nearest_dist:
+                        nearest_dist = dist
+                        nearest_spk = spk
+                
+                if nearest_spk is not None and nearest_dist <= nearest_within:
+                    chosen_spk = nearest_spk
             
-            # Assign speaker with maximum overlap
-            if overlaps:
-                best_speaker = max(overlaps, key=lambda x: x[1])[0]
-                # Convert speaker ID to readable format
-                if isinstance(best_speaker, str) and 'SPEAKER_' in best_speaker:
-                    speaker_num = int(best_speaker.replace('SPEAKER_', '')) + 1
-                    df.at[idx, 'speaker_label'] = f'person_{speaker_num}'
-                else:
-                    df.at[idx, 'speaker_label'] = f'person_{best_speaker}'
+            if chosen_spk is not None:
+                label = self._personify(chosen_spk)
+                df.at[idx, 'speaker_label'] = label
+                prev_speaker = label
+                prev_end = e
+            else:
+                df.at[idx, 'speaker_label'] = 'person_unknown'
         
         # Log speaker distribution
         speaker_counts = df['speaker_label'].value_counts()
@@ -460,7 +582,17 @@ class AriaDiarization:
                 logger.error("Diarization failed")
                 return False
             
-            # Step 4: Assign speakers
+            # Step 4: Estimate global time offset and apply correction
+            try:
+                off = self.estimate_time_offset(df, diarization, search_range=(-0.6, 0.6, 0.01))
+                if abs(off) >= 0.03:  # Only apply if offset is significant
+                    logger.info(f"Applying global time offset {off:+.3f}s to transcript timestamps")
+                    df['start_sec_normalized'] = df['start_sec_normalized'] + off
+                    df['end_sec_normalized'] = df['end_sec_normalized'] + off
+            except Exception as e:
+                logger.warning(f"Offset estimation failed: {e}")
+            
+            # Step 5: Assign speakers with improved logic
             df_with_speakers = self.assign_speakers_to_segments(df, diarization)
             
             # Step 5: Save results
