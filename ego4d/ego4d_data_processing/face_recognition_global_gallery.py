@@ -123,7 +123,7 @@ def extract_embeddings(video_path, model, max_frames=None, ground_truth_df=None)
                 'bbox': face.bbox.astype(int),
                 'embedding': face.normed_embedding
             }
-            iter_face_data = match_with_ground_truth(iter_face_data, ground_truth_df, iou_threshold=0.3)
+            iter_face_data = match_with_ground_truth(iter_face_data, ground_truth_df, iou_threshold=0.1)
             face_data.append(iter_face_data)
         frame_number += 1
     cap.release()
