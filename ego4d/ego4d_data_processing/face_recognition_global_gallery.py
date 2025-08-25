@@ -14,29 +14,26 @@ import argparse
 
 def load_ground_truth(ground_truth_path):
     """Load ground truth CSV file and return as DataFrame"""
+
     if not os.path.exists(ground_truth_path):
-        print(f"    Warning: Ground truth file not found: {ground_truth_path}")
+        print(f" Warning: Ground truth file not found: {ground_truth_path}")
         return None
-    
+
     try:
-        # Ground truth CSV has no header, column order is: frame_number,person_id,x1,x2,y1,y2,confidence
-        df = pd.read_csv(ground_truth_path, header=None, 
-                        names=['frame_number', 'person_id', 'x1_raw', 'x2_raw', 'y1_raw', 'y2_raw', 'confidence'])
-        
-        # Reorder coordinates from [x1,x2,y1,y2] to [x1,y1,x2,y2] format
-        df['x1'] = df['x1_raw']
-        df['y1'] = df['y1_raw'] 
-        df['x2'] = df['x2_raw']
-        df['y2'] = df['y2_raw']
-        
-        # Drop the raw columns
-        df = df.drop(['x1_raw', 'x2_raw', 'y1_raw', 'y2_raw'], axis=1)
-        
-        print(f"    Loaded ground truth: {len(df)} records")
-        print(f"    Ground truth unique person IDs: {sorted(df['person_id'].unique())}")
+        df = pd.read_csv(ground_truth_path, header=0)
+        df = df.rename(columns={
+            'frame_number': 'frame_number',
+            'person_id': 'person_id',
+            'x1': 'x1', 'x2': 'x2', 'y1': 'y1', 'y2': 'y2'
+        })
+        df = df[pd.to_numeric(df['person_id'], errors='coerce').notnull()]
+        df['person_id'] = df['person_id'].astype(int)
+        print(f" Loaded ground truth: {len(df)} records")
+        print(f" Ground truth unique person IDs: {sorted(df['person_id'].unique())}")
         return df
+
     except Exception as e:
-        print(f"    Error loading ground truth: {e}")
+        print(f" Error loading ground truth: {e}")
         return None
 
 def calculate_iou(box1, box2):
@@ -276,6 +273,7 @@ def main(args):
             else:
                 data['person_id'] = 'unknown'
         
+        print(f"Step 3: Saving results...")
         save_outputs(video_path, video_data, args.output_dir)
 
     end_time = time.time()
