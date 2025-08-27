@@ -57,7 +57,7 @@ print(os.path.join(os.path.dirname(torch.__file__), "lib"))
 PY
   )' >> "$tmp"
   # Do NOT export globally to avoid affecting other pipelines (e.g., face ORT expecting cuDNN 9)
-  echo 'BASE_LDLP="$CONDA_PREFIX/lib:$CONDA_PREFIX/lib/python$PYVER/site-packages/nvidia/cufft/lib:$CONDA_PREFIX/lib/python$PYVER/site-packages/nvidia/cuda_nvrtc/lib:$CONDA_PREFIX/lib/python$PYVER/site-packages/nvidia/curand/lib:'"$CUDA_LIB_PATH"':$LD_LIBRARY_PATH"' >> "$tmp"
+  echo 'BASE_LDLP="$CONDA_PREFIX/lib:$CONDA_PREFIX/lib/python$PYVER/site-packages/nvidia/cudnn/lib:$CONDA_PREFIX/lib/python$PYVER/site-packages/nvidia/cufft/lib:$CONDA_PREFIX/lib/python$PYVER/site-packages/nvidia/cuda_nvrtc/lib:$CONDA_PREFIX/lib/python$PYVER/site-packages/nvidia/curand/lib:'"$CUDA_LIB_PATH"':$LD_LIBRARY_PATH"' >> "$tmp"
   echo "export HF_TOKEN=\"\${HF_TOKEN:-}\"" >> "$tmp"
 
   cat >> "$tmp" <<'PY'
