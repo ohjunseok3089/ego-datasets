@@ -2,8 +2,9 @@
 set -Eeuo pipefail
 
 # === Config ===
-BASE_DIR="/mas/robots/prg-aria/raw"          # Aria media directory (updated)
-OUTPUT_BASE_DIR="/mas/robots/prg-aria"       # transcript/ lives here
+RAW_DIR="/mas/robots/prg-aria/raw"          # Aria raw recording roots (contains per-session folders)
+DATASET_DIR="/mas/robots/prg-aria/dataset"  # Flattened MP4 dataset
+OUTPUT_BASE_DIR="/mas/robots/prg-aria"      # transcript/ lives here
 NUM_GPUS=4
 CONDA_ENV_NAME="ego-datasets"
 CUDA_LIB_PATH="/usr/local/cuda-12/lib64"
@@ -16,13 +17,24 @@ FPS=30.0
 echo "Starting Aria WhisperX diarization..."
 cd "$(dirname "$0")"
 
-if [ ! -d "$BASE_DIR" ]; then echo "Error: BASE_DIR not found: $BASE_DIR"; exit 1; fi
+if [ ! -d "$RAW_DIR" ]; then echo "Error: RAW_DIR not found: $RAW_DIR"; exit 1; fi
+if [ ! -d "$DATASET_DIR" ]; then echo "Error: DATASET_DIR not found: $DATASET_DIR"; exit 1; fi
 mkdir -p "$OUTPUT_BASE_DIR/transcript"
 
-# Collect media files (mp4, wav) recursively
-mapfile -t files < <(find "$BASE_DIR" -type f \( -iname '*.mp4' -o -iname '*.wav' \) -print | sort)
-if [ ${#files[@]} -eq 0 ]; then echo "No input media in $BASE_DIR"; exit 1; fi
-echo "Found ${#files[@]} files. Launching $NUM_GPUS screens."
+# Collect media files:
+# 1) All mp4 in DATASET_DIR
+# 2) For each raw session dir, map to DATASET_DIR/<session_name>.mp4 if exists
+tmp_list=$(mktemp)
+find "$DATASET_DIR" -maxdepth 1 -type f -iname '*.mp4' -print >> "$tmp_list"
+while IFS= read -r d; do
+  base=$(basename "$d")
+  [ -f "$DATASET_DIR/$base.mp4" ] && echo "$DATASET_DIR/$base.mp4" >> "$tmp_list"
+done < <(find "$RAW_DIR" -mindepth 1 -maxdepth 1 -type d -print)
+# De-duplicate and load into array
+mapfile -t files < <(sort -u "$tmp_list")
+rm -f "$tmp_list"
+if [ ${#files[@]} -eq 0 ]; then echo "No input media found in $DATASET_DIR or mapped from $RAW_DIR"; exit 1; fi
+echo "Found ${#files[@]} mp4 files. Launching $NUM_GPUS screens."
 
 declare -a gpu_jobs
 for ((i=0;i<NUM_GPUS;i++)); do gpu_jobs[$i]=""; done
