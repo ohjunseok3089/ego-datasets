@@ -1,4 +1,5 @@
 #!/bin/bash
+set -Eeuo pipefail
 
 # --- Configuration ---
 BASE_DIR="/mas/robots/prg-ego4d/raw/v2/full_scale.gaze/"
@@ -11,6 +12,9 @@ GROUND_TRUTH_DIR="/mas/robots/prg-ego4d/face_detection/"
 # --- Script Start ---
 echo "Starting Face Recognition Batch Processing..."
 echo "============================================="
+
+# Always run from this script's directory so relative imports work
+cd "$(dirname "$0")"
 
 # Check if the base directory exists
 if [ ! -d "$BASE_DIR" ]; then
@@ -79,6 +83,16 @@ for ((gpu=0; gpu<NUM_GPUS; gpu++)); do
     echo "echo '[GPU $gpu] Activating Conda environment: $CONDA_ENV_NAME'" >> "$temp_script"
     echo "source \"\$(conda info --base)/etc/profile.d/conda.sh\"" >> "$temp_script"
     echo "conda activate $CONDA_ENV_NAME" >> "$temp_script"
+    # Ensure user-site packages don't shadow the env (avoids numpy/pandas ABI mismatches)
+    echo "export PYTHONNOUSERSITE=1" >> "$temp_script"
+    echo "unset PYTHONPATH || true" >> "$temp_script"
+
+    # Print runtime versions to the log for debugging
+    echo "python - <<'PY'" >> "$temp_script"
+    echo "import sys, importlib" >> "$temp_script"
+    echo "def ver(mod):\n    try:\n        m = importlib.import_module(mod)\n        return getattr(m, '__version__', 'unknown')\n    except Exception as e:\n        return f'ImportError: {e}'" >> "$temp_script"
+    echo "print('Python', sys.version.split()[0], '| numpy', ver('numpy'), '| pandas', ver('pandas'), '| insightface', ver('insightface'), '| onnxruntime', ver('onnxruntime'))" >> "$temp_script"
+    echo "PY" >> "$temp_script"
 
     # --- Set the CUDA library path ---
     echo "echo '[GPU $gpu] Setting CUDA library path...'" >> "$temp_script"
@@ -90,7 +104,7 @@ for ((gpu=0; gpu<NUM_GPUS; gpu++)); do
     echo "    if [ -n \"\$video_path\" ]; then" >> "$temp_script"
     echo "        echo \"[GPU $gpu] --------------------------------------------------\"" >> "$temp_script"
     echo "        echo \"[GPU $gpu] Processing video: \$video_path\"" >> "$temp_script"
-    echo "        CUDA_VISIBLE_DEVICES=$gpu python face_recognition_global_gallery.py \\" >> "$temp_script"
+    echo "        CUDA_VISIBLE_DEVICES=$gpu python -s face_recognition_global_gallery.py \\" >> "$temp_script"
     echo "            --video_path \"\$video_path\" \\" >> "$temp_script"
     if [ -n "$GROUND_TRUTH_DIR" ]; then
         echo "            --output_dir \"$OUTPUT_DIR\" \\" >> "$temp_script"

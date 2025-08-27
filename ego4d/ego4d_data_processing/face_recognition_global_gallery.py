@@ -3,6 +3,7 @@ import numpy as np
 import pandas as pd
 import insightface
 from insightface.app import FaceAnalysis
+import warnings
 import hdbscan
 import csv
 from collections import defaultdict
@@ -11,6 +12,38 @@ import os
 import glob
 import time
 import argparse
+
+
+def create_face_analysis(preferred_provider: str):
+    """Create FaceAnalysis with best-effort provider selection.
+
+    - Tries to use the requested onnxruntime provider if supported.
+    - Falls back gracefully for older insightface versions without `providers`.
+    """
+    provider_to_use = preferred_provider
+    try:
+        import onnxruntime as ort
+
+        available = ort.get_available_providers()
+        print(f"ONNX Runtime providers available: {available}")
+        if provider_to_use not in available:
+            warnings.warn(
+                f"Requested provider '{provider_to_use}' not in available providers; using CPUExecutionProvider."
+            )
+            provider_to_use = "CPUExecutionProvider"
+    except Exception as e:
+        # onnxruntime not installed or not importable; proceed and let insightface decide
+        print(f"onnxruntime check skipped: {e}")
+
+    # Newer insightface supports `providers`
+    try:
+        return FaceAnalysis(name="buffalo_l", providers=[provider_to_use])
+    except TypeError:
+        # Older insightface builds don't accept `providers`
+        warnings.warn(
+            "InsightFace FaceAnalysis does not support 'providers' arg; falling back to default backend."
+        )
+        return FaceAnalysis(name="buffalo_l")
 
 def load_ground_truth(ground_truth_path):
     """Load ground truth CSV file and return as DataFrame"""
@@ -183,7 +216,7 @@ def save_outputs(video_path, face_data_for_video, output_dir):
 
 def main(args):
     print("Initializing InsightFace model...")
-    app = FaceAnalysis(name='buffalo_l', providers=[args.execution_provider])
+    app = create_face_analysis(args.execution_provider)
     app.prepare(ctx_id=0, det_size=(640, 640))
     
     # Check if the video file exists
