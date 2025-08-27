@@ -13,7 +13,6 @@ import glob
 import time
 import argparse
 from typing import Optional
-import inspect
 
 
 def _pick_insightface_pack(user_choice: Optional[str] = None) -> str:
@@ -52,12 +51,8 @@ def _pick_insightface_pack(user_choice: Optional[str] = None) -> str:
         return "antelope"
 
 
-def create_face_analysis(preferred_provider: str, model_root: Optional[str] = None, model_name: str = "auto"):
-    """Create FaceAnalysis with best-effort provider selection.
-
-    - Tries to use the requested onnxruntime provider if supported.
-    - Falls back gracefully for older insightface versions without `providers`.
-    """
+def create_face_analysis(preferred_provider: str, model_root: Optional[str] = None, model_name: str = "antelopev2"):
+    """Create FaceAnalysis for InsightFace 0.7.3 with CUDA provider only."""
     provider_to_use = preferred_provider
     cuda_available = False
     try:
@@ -81,22 +76,13 @@ def create_face_analysis(preferred_provider: str, model_root: Optional[str] = No
     if model_root is None:
         model_root = os.environ.get("INSIGHTFACE_HOME")
 
-    # Prefer passing `providers` if supported by installed insightface
-    supports_providers = "providers" in inspect.signature(FaceAnalysis.__init__).parameters
+    # Initialize FaceAnalysis exactly as supported by insightface>=0.7.3
     try:
-        pack = _pick_insightface_pack(model_name)
-        print(f"Using InsightFace pack: {pack}")
-        if supports_providers:
-            if model_root:
-                return FaceAnalysis(name=pack, providers=[provider_to_use], root=model_root)
-            return FaceAnalysis(name=pack, providers=[provider_to_use])
-        else:
-            warnings.warn(
-                "InsightFace FaceAnalysis does not support 'providers' arg; using default backend."
-            )
-            if model_root:
-                return FaceAnalysis(name=pack, root=model_root)
-            return FaceAnalysis(name=pack)
+        pack = model_name if model_name and model_name != "auto" else "antelopev2"
+        print(f"Using InsightFace pack: {pack} with provider {provider_to_use}")
+        if model_root:
+            return FaceAnalysis(name=pack, providers=[provider_to_use], root=model_root)
+        return FaceAnalysis(name=pack, providers=[provider_to_use])
     except (TypeError, AssertionError, RuntimeError) as e:
         # Commonly: unsupported kwargs or missing models in very old versions
         msg = str(e)
@@ -393,7 +379,7 @@ if __name__ == "__main__":
         help="ONNX Runtime EP (CUDA required). 'auto' enforces CUDA."
     )
     parser.add_argument('--insightface_root', type=str, default=None, help="Optional cache dir for InsightFace models (defaults to $INSIGHTFACE_HOME).")
-    parser.add_argument('--insightface_model', type=str, default='auto', help="InsightFace model pack: auto|buffalo_l|antelopev2|antelope")
+    parser.add_argument('--insightface_model', type=str, default='antelopev2', choices=['antelopev2','buffalo_l','antelope'], help="InsightFace model pack (default: antelopev2)")
     parser.add_argument('--ground_truth_dir', type=str, help="Directory containing ground truth CSV files (optional).")
     parser.add_argument('--max_frames', type=int, default=36000, help="Maximum frames to process (default: 36000 = 20 minutes at 30fps).")
     

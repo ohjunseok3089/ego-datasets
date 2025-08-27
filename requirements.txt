@@ -69,3 +69,6 @@ ffmpeg-python>=0.2.0
 
 # Optional: If you need TensorRT EP for ONNX Runtime, install NVIDIA TensorRT separately.
 protobuf
+nvidia-cufft-cu12>=11.0
+nvidia-cuda-nvrtc-cu12>=12.2
+nvidia-cudnn-cu12>=9.0

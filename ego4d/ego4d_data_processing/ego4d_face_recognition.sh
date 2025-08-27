@@ -91,7 +91,7 @@ for ((gpu=0; gpu<NUM_GPUS; gpu++)); do
     echo "mkdir -p \"$OUTPUT_DIR/.insightface\"" >> "$temp_script"
 
     # Print runtime versions to the log for debugging
-cat >> "$temp_script" <<'PY'
+    cat >> "$temp_script" <<'PY'
 python - <<'PYIN'
 import sys, importlib
 def ver(mod):
@@ -116,11 +116,31 @@ PY
 
     # --- Set the CUDA library path ---
     echo "echo '[GPU $gpu] Setting CUDA library path...'" >> "$temp_script"
+    echo 'PYVER=$(python -c "import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")")' >> "$temp_script"
+    echo 'export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$CONDA_PREFIX/lib/python$PYVER/site-packages/nvidia/cufft/lib:$CONDA_PREFIX/lib/python$PYVER/site-packages/nvidia/cuda_nvrtc/lib:$CONDA_PREFIX/lib/python$PYVER/site-packages/nvidia/cudnn/lib:$CONDA_PREFIX/lib/python$PYVER/site-packages/nvidia/curand/lib:$LD_LIBRARY_PATH"' >> "$temp_script"
+    # Keep any additional system CUDA libs if specified
     echo "export LD_LIBRARY_PATH=$CUDA_LIB_PATH:\$LD_LIBRARY_PATH" >> "$temp_script"
     # -------------------------------------------
 
+    # Preflight: check ORT providers and CUDA DLL deps are loadable
+    cat >> "$temp_script" <<'PY'
+python - <<'PYIN'
+import ctypes, onnxruntime as ort, sys
+print('[Preflight] ORT:', ort.__version__, 'providers:', ort.get_available_providers())
+try:
+    for so in [
+        'libcublasLt.so.12','libcublas.so.12','libcudart.so.12',
+        'libcurand.so.10','libcufft.so.11','libnvrtc.so.12','libcudnn.so.9']:
+        ctypes.CDLL(so)
+    print('[Preflight] CUDA runtime deps OK')
+except OSError as e:
+    print('[Preflight] Missing CUDA runtime dep:', e)
+    sys.exit(1)
+PYIN
+PY
+
     # Prefetch InsightFace models once per session to avoid runtime assert
-cat >> "$temp_script" <<'PY'
+    cat >> "$temp_script" <<'PY'
 python - <<'PYIN'
 import os, sys
 from face_recognition_global_gallery import create_face_analysis
