@@ -55,6 +55,9 @@ py-cpuinfo==9.0.0
 gradio==4.44.1
 onnxslim==0.1.31
 
+######## WhisperX (ASR + diarization helper) ########
+whisperx>=3.1.1
+
 ######## Audio diarization (Aria) ########
 pyannote.audio>=3.1.0
 librosa>=0.10.0
