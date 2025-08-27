@@ -2,8 +2,8 @@
 set -Eeuo pipefail
 
 # === Config ===
-BASE_DIR="/mas/robots/aria/raw"          # Set to your Aria media directory
-OUTPUT_BASE_DIR="/mas/robots/aria/outputs" # Where transcript/ CSV will be written
+BASE_DIR="/mas/robots/prg-aria/raw"          # Aria media directory (updated)
+OUTPUT_BASE_DIR="/mas/robots/prg-aria"       # transcript/ lives here
 NUM_GPUS=4
 CONDA_ENV_NAME="ego-datasets"
 CUDA_LIB_PATH="/usr/local/cuda-12/lib64"
@@ -19,8 +19,8 @@ cd "$(dirname "$0")"
 if [ ! -d "$BASE_DIR" ]; then echo "Error: BASE_DIR not found: $BASE_DIR"; exit 1; fi
 mkdir -p "$OUTPUT_BASE_DIR/transcript"
 
-# Collect media files (mp4, wav)
-mapfile -t files < <(ls -1 "$BASE_DIR"/*.mp4 "$BASE_DIR"/*.wav 2>/dev/null || true)
+# Collect media files (mp4, wav) recursively
+mapfile -t files < <(find "$BASE_DIR" -type f \( -iname '*.mp4' -o -iname '*.wav' \) -print | sort)
 if [ ${#files[@]} -eq 0 ]; then echo "No input media in $BASE_DIR"; exit 1; fi
 echo "Found ${#files[@]} files. Launching $NUM_GPUS screens."
 
@@ -71,4 +71,3 @@ PY
 done
 
 echo "All Aria diarization jobs launched. Use 'screen -ls' to list." 
-

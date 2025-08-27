@@ -7,11 +7,11 @@
 # - If you have a different CUDA version, adjust the PyTorch index URL and versions accordingly.
 # - Installs OpenCV headless (no GUI). Replace with opencv-python if you need GUI windows.
 
-# Use CUDA 12.1 wheels for torch/torchvision/torchaudio (works on CUDA 12.2)
+# PyTorch CUDA 12.1 wheels
 --extra-index-url https://download.pytorch.org/whl/cu121
 
 ######## Core scientific stack (NumPy 2.x) ########
-# Pin NumPy to <2.3 to satisfy cv2 4.12 wheels
+# OpenCV 4.12 wheels require numpy <2.3 → fixed to 2.2.x
 numpy==2.2.6
 pandas==2.2.3
 scipy==1.14.1
@@ -25,14 +25,16 @@ requests==2.32.3
 matplotlib==3.8.4
 seaborn==0.13.2
 Pillow==10.4.0
+packaging==24.1         
+cython>=3.0              
 
 ######## Computer Vision / Media ########
-# With NumPy 2.x, use OpenCV 4.12 wheels (require numpy>=2,<2.3)
+# NumPy 2.x compatible OpenCV
 opencv-python-headless==4.12.0.88
 
 ######## ONNX + InsightFace (GPU) ########
-onnx==1.16.0
-onnxruntime-gpu==1.22.0
+onnx==1.16.0             
+onnxruntime-gpu==1.22.0  
 insightface==0.7.3
 hdbscan==0.8.33
 easydict==1.13
@@ -64,14 +66,6 @@ librosa>=0.10.0
 soundfile>=0.12.1
 ffmpeg-python>=0.2.0
 
-# Optional: FAISS for graph-based face clustering (GPU). If install fails, comment out or install system-specific build.
-# faiss-gpu>=1.7.0
-
-# Optional: If you need OpenCV with GUI (highgui), replace headless with this:
+# Optional: If you need GUI, replace with this:
 # opencv-python==4.12.0.88
 
-# Optional: If you need TensorRT EP for ONNX Runtime, install NVIDIA TensorRT separately.
-# protobuf
-# nvidia-cufft-cu12>=11.0
-# nvidia-cuda-nvrtc-cu12>=12.2
-# nvidia-cudnn-cu12>=9.0
