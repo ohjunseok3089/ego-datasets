@@ -50,24 +50,34 @@ for ((gpu=0; gpu<NUM_GPUS; gpu++)); do
   echo "conda activate $CONDA_ENV_NAME" >> "$tmp"
   echo "export PYTHONNOUSERSITE=1; unset PYTHONPATH || true" >> "$tmp"
   echo 'PYVER=$(python -c "import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")")' >> "$tmp"
-  echo 'export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$CONDA_PREFIX/lib/python$PYVER/site-packages/nvidia/cufft/lib:$CONDA_PREFIX/lib/python$PYVER/site-packages/nvidia/cuda_nvrtc/lib:$CONDA_PREFIX/lib/python$PYVER/site-packages/nvidia/cudnn/lib:$CONDA_PREFIX/lib/python$PYVER/site-packages/nvidia/curand/lib:'"$CUDA_LIB_PATH"':$LD_LIBRARY_PATH"' >> "$tmp"
+  # Discover PyTorch's bundled CUDA libs (includes cuDNN 8 for torch cu121)
+  echo 'TORCH_LIB=$(python - <<PY
+import os, torch
+print(os.path.join(os.path.dirname(torch.__file__), "lib"))
+PY
+  )' >> "$tmp"
+  # Do NOT export globally to avoid affecting other pipelines (e.g., face ORT expecting cuDNN 9)
+  echo 'BASE_LDLP="$CONDA_PREFIX/lib:$CONDA_PREFIX/lib/python$PYVER/site-packages/nvidia/cufft/lib:$CONDA_PREFIX/lib/python$PYVER/site-packages/nvidia/cuda_nvrtc/lib:$CONDA_PREFIX/lib/python$PYVER/site-packages/nvidia/curand/lib:'"$CUDA_LIB_PATH"':$LD_LIBRARY_PATH"' >> "$tmp"
   echo "export HF_TOKEN=\"\${HF_TOKEN:-}\"" >> "$tmp"
 
   cat >> "$tmp" <<'PY'
 python - <<'PYIN'
-import ctypes, onnxruntime as ort, sys
-print('[Preflight] ORT:', ort.__version__, 'providers:', ort.get_available_providers())
-if 'CUDAExecutionProvider' not in ort.get_available_providers():
-    print('[Error] CUDAExecutionProvider missing'); sys.exit(1)
-for so in ['libcublasLt.so.12','libcublas.so.12','libcudart.so.12','libcurand.so.10','libcufft.so.11','libnvrtc.so.12','libcudnn.so.9']:
-    ctypes.CDLL(so)
-print('[Preflight] CUDA deps OK')
+import sys, ctypes
+import torch
+print('[Preflight] torch', torch.__version__, 'CUDA', torch.version.cuda)
+print('cuDNN version (torch):', torch.backends.cudnn.version())
+try:
+    ctypes.CDLL('libcudnn.so.8')
+    print('[Preflight] libcudnn.so.8 OK')
+except OSError as e:
+    print('[Preflight] Missing libcudnn.so.8:', e)
+    sys.exit(1)
 PYIN
 PY
 
   while IFS= read -r f; do
     echo "echo \"[GPU $gpu] Processing: \$f\"" >> "$tmp"
-    echo "CUDA_VISIBLE_DEVICES=$gpu python -s whisperx_diarization_aria.py \\" >> "$tmp"
+    echo "LD_LIBRARY_PATH=\"\$TORCH_LIB:\$BASE_LDLP\" CUDA_VISIBLE_DEVICES=$gpu python -s whisperx_diarization_aria.py \\" >> "$tmp"
     echo "  --input_path \"\$f\" \\" >> "$tmp"
     echo "  --output_base_dir \"$OUTPUT_BASE_DIR\" \\" >> "$tmp"
     echo "  --model_size \"$MODEL_SIZE\" \\" >> "$tmp"
