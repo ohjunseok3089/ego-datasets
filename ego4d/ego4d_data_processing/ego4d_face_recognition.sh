@@ -115,15 +115,36 @@ PY
     echo "export LD_LIBRARY_PATH=$CUDA_LIB_PATH:\$LD_LIBRARY_PATH" >> "$temp_script"
     # -------------------------------------------
 
+    # Prefetch InsightFace models once per session to avoid runtime assert
+    cat >> "$temp_script" <<'PY'
+python - <<'PYIN'
+import os
+from face_recognition_global_gallery import create_face_analysis
+try:
+    app = create_face_analysis('auto', model_root=os.environ.get('INSIGHTFACE_HOME'), model_name='auto')
+    try:
+        import onnxruntime as ort
+        cuda_ok = 'CUDAExecutionProvider' in ort.get_available_providers()
+    except Exception:
+        cuda_ok = False
+    ctx_id = 0 if cuda_ok else -1
+    app.prepare(ctx_id=ctx_id, det_size=(640, 640))
+    print('[Prefetch] InsightFace models prepared successfully.')
+except Exception as e:
+    print('[Prefetch] Warning: model prefetch failed:', e)
+PYIN
+PY
+
     echo "IFS=';' read -ra videos_to_process <<< \"$job_list\"" >> "$temp_script"
     echo "for video_path in \"\${videos_to_process[@]}\"; do" >> "$temp_script"
     echo "    if [ -n \"\$video_path\" ]; then" >> "$temp_script"
     echo "        echo \"[GPU $gpu] --------------------------------------------------\"" >> "$temp_script"
     echo "        echo \"[GPU $gpu] Processing video: \$video_path\"" >> "$temp_script"
     echo "        CUDA_VISIBLE_DEVICES=$gpu python -s face_recognition_global_gallery.py \\" >> "$temp_script"
-    echo "            --video_path \"\$video_path\" \\" >> "$temp_script"
-    echo "            --execution_provider auto \\" >> "$temp_script"
-    echo "            --insightface_root \"\$INSIGHTFACE_HOME\" \\" >> "$temp_script"
+        echo "            --video_path \"\$video_path\" \\" >> "$temp_script"
+        echo "            --execution_provider auto \\" >> "$temp_script"
+        echo "            --insightface_root \"\$INSIGHTFACE_HOME\" \\" >> "$temp_script"
+        echo "            --insightface_model auto \\" >> "$temp_script"
     if [ -n "$GROUND_TRUTH_DIR" ]; then
         echo "            --output_dir \"$OUTPUT_DIR\" \\" >> "$temp_script"
         echo "            --ground_truth_dir \"$GROUND_TRUTH_DIR\"" >> "$temp_script"
