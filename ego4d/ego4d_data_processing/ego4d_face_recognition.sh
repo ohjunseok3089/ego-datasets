@@ -145,13 +145,17 @@ python - <<'PYIN'
 import os, sys
 from face_recognition_global_gallery import create_face_analysis
 try:
-    app = create_face_analysis('auto', model_root=os.environ.get('INSIGHTFACE_HOME'), model_name='auto')
+    app = create_face_analysis('auto', model_root=os.environ.get('INSIGHTFACE_HOME'), model_name='antelopev2')
     # CUDA-only mode; create_face_analysis enforces CUDA
     app.prepare(ctx_id=0, det_size=(640, 640))
     print('[Prefetch] InsightFace models prepared successfully.')
 except Exception as e:
-    print('[Prefetch] Error: model prefetch failed:', e)
-    sys.exit(1)
+    # If models already exist, treat as success
+    if isinstance(e, (FileExistsError, OSError)) and 'File exists' in str(e):
+        print('[Prefetch] Models already present; continuing.')
+    else:
+        print('[Prefetch] Error: model prefetch failed:', e)
+        sys.exit(1)
 PYIN
 PY
 
@@ -164,7 +168,7 @@ PY
         echo "            --video_path \"\$video_path\" \\" >> "$temp_script"
         echo "            --execution_provider auto \\" >> "$temp_script"
         echo "            --insightface_root \"\$INSIGHTFACE_HOME\" \\" >> "$temp_script"
-        echo "            --insightface_model auto \\" >> "$temp_script"
+        echo "            --insightface_model antelopev2 \\" >> "$temp_script"
     if [ -n "$GROUND_TRUTH_DIR" ]; then
         echo "            --output_dir \"$OUTPUT_DIR\" \\" >> "$temp_script"
         echo "            --ground_truth_dir \"$GROUND_TRUTH_DIR\"" >> "$temp_script"
