@@ -13,6 +13,7 @@ import glob
 import time
 import argparse
 from typing import Optional
+import inspect
 
 
 def create_face_analysis(preferred_provider: str, model_root: Optional[str] = None):
@@ -22,11 +23,15 @@ def create_face_analysis(preferred_provider: str, model_root: Optional[str] = No
     - Falls back gracefully for older insightface versions without `providers`.
     """
     provider_to_use = preferred_provider
+    cuda_available = False
     try:
         import onnxruntime as ort
 
         available = ort.get_available_providers()
         print(f"ONNX Runtime providers available: {available}")
+        cuda_available = "CUDAExecutionProvider" in available
+        if provider_to_use == "auto":
+            provider_to_use = "CUDAExecutionProvider" if cuda_available else "CPUExecutionProvider"
         if provider_to_use not in available:
             warnings.warn(
                 f"Requested provider '{provider_to_use}' not in available providers; using CPUExecutionProvider."
@@ -40,33 +45,31 @@ def create_face_analysis(preferred_provider: str, model_root: Optional[str] = No
     if model_root is None:
         model_root = os.environ.get("INSIGHTFACE_HOME")
 
-    # Newer insightface supports `providers`
+    # Prefer passing `providers` if supported by installed insightface
+    supports_providers = "providers" in inspect.signature(FaceAnalysis.__init__).parameters
     try:
-        if model_root:
-            return FaceAnalysis(name="buffalo_l", providers=[provider_to_use], root=model_root)
-        return FaceAnalysis(name="buffalo_l", providers=[provider_to_use])
-    except TypeError:
-        # Older insightface builds don't accept `providers`
-        warnings.warn(
-            "InsightFace FaceAnalysis does not support 'providers' arg; falling back to default backend."
-        )
-        try:
+        if supports_providers:
+            if model_root:
+                return FaceAnalysis(name="buffalo_l", providers=[provider_to_use], root=model_root)
+            return FaceAnalysis(name="buffalo_l", providers=[provider_to_use])
+        else:
+            warnings.warn(
+                "InsightFace FaceAnalysis does not support 'providers' arg; using default backend."
+            )
             if model_root:
                 return FaceAnalysis(name="buffalo_l", root=model_root)
             return FaceAnalysis(name="buffalo_l")
-        except RuntimeError as e:
-            # Commonly: 'error on model routing' due to missing downloaded models or unsupported pack
-            msg = str(e)
-            print(f"InsightFace initialization failed: {msg}")
-            print(
-                "Hint: ensure network access to download models on first run, "
-                "or set INSIGHTFACE_HOME to a writable directory and pre-download 'buffalo_l'."
-            )
-            print(
-                "Example to prefetch: python -c \"from insightface.app import FaceAnalysis; "
-                "import os; FaceAnalysis(name='buffalo_l', root=os.environ.get('INSIGHTFACE_HOME') or './.insightface')).prepare(ctx_id=0)\""
-            )
-            raise
+    except (TypeError, AssertionError, RuntimeError) as e:
+        # Commonly: unsupported kwargs or missing models in very old versions
+        msg = str(e)
+        print(f"InsightFace initialization failed: {msg}")
+        print(
+            "Troubleshooting: install 'onnxruntime-gpu' to enable CUDA, and upgrade 'insightface>=0.7'."
+        )
+        print(
+            "If running offline, pre-download models by setting INSIGHTFACE_HOME and calling FaceAnalysis(...).prepare()."
+        )
+        raise
 
 def load_ground_truth(ground_truth_path):
     """Load ground truth CSV file and return as DataFrame"""
@@ -239,8 +242,10 @@ def save_outputs(video_path, face_data_for_video, output_dir):
 
 def main(args):
     print("Initializing InsightFace model...")
-    app = create_face_analysis(args.execution_provider)
-    app.prepare(ctx_id=0, det_size=(640, 640))
+    app = create_face_analysis(args.execution_provider, model_root=args.insightface_root)
+    # Use GPU ctx_id if CUDA EP is selected; fall back to CPU otherwise
+    ctx_id = 0 if args.execution_provider in ("auto", "CUDAExecutionProvider") else -1
+    app.prepare(ctx_id=ctx_id, det_size=(640, 640))
     
     # Check if the video file exists
     if not os.path.exists(args.video_path):
@@ -342,7 +347,14 @@ if __name__ == "__main__":
     parser.add_argument('--output_dir', type=str, default="processed_videos", help="Directory to save output files.")
     parser.add_argument('--min_cluster_size', type=int, default=5, help="Minimum cluster size for HDBSCAN.")
     parser.add_argument('--recognition_threshold', type=float, default=0.8, help="Cosine distance threshold for recognition.")
-    parser.add_argument('--execution_provider', type=str, default='CUDAExecutionProvider', help="Execution provider for ONNX Runtime (e.g., 'CoreMLExecutionProvider', 'CUDAExecutionProvider', 'CPUExecutionProvider').")
+    parser.add_argument(
+        '--execution_provider',
+        type=str,
+        default='auto',
+        choices=['auto', 'CUDAExecutionProvider', 'CPUExecutionProvider', 'CoreMLExecutionProvider'],
+        help="ONNX Runtime EP: 'auto' picks CUDA if available, else CPU."
+    )
+    parser.add_argument('--insightface_root', type=str, default=None, help="Optional cache dir for InsightFace models (defaults to $INSIGHTFACE_HOME).")
     parser.add_argument('--ground_truth_dir', type=str, help="Directory containing ground truth CSV files (optional).")
     parser.add_argument('--max_frames', type=int, default=36000, help="Maximum frames to process (default: 36000 = 20 minutes at 30fps).")
     

@@ -100,6 +100,13 @@ def ver(mod):
     except Exception as e:
         return f'ImportError: {e}'
 print('Python', sys.version.split()[0], '| numpy', ver('numpy'), '| pandas', ver('pandas'), '| insightface', ver('insightface'), '| onnxruntime', ver('onnxruntime'))
+try:
+    import onnxruntime as ort
+    print('ONNX Runtime providers available:', ort.get_available_providers())
+    if 'CUDAExecutionProvider' not in ort.get_available_providers():
+        print('[Warn] CUDAExecutionProvider not available. Install onnxruntime-gpu and ensure CUDA libs in LD_LIBRARY_PATH.')
+except Exception as e:
+    print('onnxruntime import failed for provider check:', e)
 PYIN
 PY
 
@@ -115,6 +122,8 @@ PY
     echo "        echo \"[GPU $gpu] Processing video: \$video_path\"" >> "$temp_script"
     echo "        CUDA_VISIBLE_DEVICES=$gpu python -s face_recognition_global_gallery.py \\" >> "$temp_script"
     echo "            --video_path \"\$video_path\" \\" >> "$temp_script"
+    echo "            --execution_provider auto \\" >> "$temp_script"
+    echo "            --insightface_root \"\$INSIGHTFACE_HOME\" \\" >> "$temp_script"
     if [ -n "$GROUND_TRUTH_DIR" ]; then
         echo "            --output_dir \"$OUTPUT_DIR\" \\" >> "$temp_script"
         echo "            --ground_truth_dir \"$GROUND_TRUTH_DIR\"" >> "$temp_script"
