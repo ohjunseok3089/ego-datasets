@@ -26,7 +26,8 @@ seaborn==0.13.2
 Pillow==10.4.0
 
 ######## Computer Vision / Media ########
-opencv-python-headless==4.12.0.88
+# Use 4.9.x to avoid forcing numpy>=2 on OpenCV wheels
+opencv-python-headless==4.9.0.80
 
 ######## ONNX + InsightFace (GPU) ########
 onnx==1.16.0
