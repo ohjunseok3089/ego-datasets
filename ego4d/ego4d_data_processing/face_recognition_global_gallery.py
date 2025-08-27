@@ -12,9 +12,10 @@ import os
 import glob
 import time
 import argparse
+from typing import Optional
 
 
-def create_face_analysis(preferred_provider: str):
+def create_face_analysis(preferred_provider: str, model_root: Optional[str] = None):
     """Create FaceAnalysis with best-effort provider selection.
 
     - Tries to use the requested onnxruntime provider if supported.
@@ -35,15 +36,37 @@ def create_face_analysis(preferred_provider: str):
         # onnxruntime not installed or not importable; proceed and let insightface decide
         print(f"onnxruntime check skipped: {e}")
 
+    # Determine model root directory from arg or env
+    if model_root is None:
+        model_root = os.environ.get("INSIGHTFACE_HOME")
+
     # Newer insightface supports `providers`
     try:
+        if model_root:
+            return FaceAnalysis(name="buffalo_l", providers=[provider_to_use], root=model_root)
         return FaceAnalysis(name="buffalo_l", providers=[provider_to_use])
     except TypeError:
         # Older insightface builds don't accept `providers`
         warnings.warn(
             "InsightFace FaceAnalysis does not support 'providers' arg; falling back to default backend."
         )
-        return FaceAnalysis(name="buffalo_l")
+        try:
+            if model_root:
+                return FaceAnalysis(name="buffalo_l", root=model_root)
+            return FaceAnalysis(name="buffalo_l")
+        except RuntimeError as e:
+            # Commonly: 'error on model routing' due to missing downloaded models or unsupported pack
+            msg = str(e)
+            print(f"InsightFace initialization failed: {msg}")
+            print(
+                "Hint: ensure network access to download models on first run, "
+                "or set INSIGHTFACE_HOME to a writable directory and pre-download 'buffalo_l'."
+            )
+            print(
+                "Example to prefetch: python -c \"from insightface.app import FaceAnalysis; "
+                "import os; FaceAnalysis(name='buffalo_l', root=os.environ.get('INSIGHTFACE_HOME') or './.insightface')).prepare(ctx_id=0)\""
+            )
+            raise
 
 def load_ground_truth(ground_truth_path):
     """Load ground truth CSV file and return as DataFrame"""

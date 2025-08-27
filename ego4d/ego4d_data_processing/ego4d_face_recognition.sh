@@ -86,13 +86,22 @@ for ((gpu=0; gpu<NUM_GPUS; gpu++)); do
     # Ensure user-site packages don't shadow the env (avoids numpy/pandas ABI mismatches)
     echo "export PYTHONNOUSERSITE=1" >> "$temp_script"
     echo "unset PYTHONPATH || true" >> "$temp_script"
+    # Ensure insightface model cache is writable and persistent
+    echo "export INSIGHTFACE_HOME=$OUTPUT_DIR/.insightface" >> "$temp_script"
 
     # Print runtime versions to the log for debugging
-    echo "python - <<'PY'" >> "$temp_script"
-    echo "import sys, importlib" >> "$temp_script"
-    echo "def ver(mod):\n    try:\n        m = importlib.import_module(mod)\n        return getattr(m, '__version__', 'unknown')\n    except Exception as e:\n        return f'ImportError: {e}'" >> "$temp_script"
-    echo "print('Python', sys.version.split()[0], '| numpy', ver('numpy'), '| pandas', ver('pandas'), '| insightface', ver('insightface'), '| onnxruntime', ver('onnxruntime'))" >> "$temp_script"
-    echo "PY" >> "$temp_script"
+    cat >> "$temp_script" <<'PY'
+python - <<'PYIN'
+import sys, importlib
+def ver(mod):
+    try:
+        m = importlib.import_module(mod)
+        return getattr(m, '__version__', 'unknown')
+    except Exception as e:
+        return f'ImportError: {e}'
+print('Python', sys.version.split()[0], '| numpy', ver('numpy'), '| pandas', ver('pandas'), '| insightface', ver('insightface'), '| onnxruntime', ver('onnxruntime'))
+PYIN
+PY
 
     # --- Set the CUDA library path ---
     echo "echo '[GPU $gpu] Setting CUDA library path...'" >> "$temp_script"
