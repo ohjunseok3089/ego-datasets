@@ -88,9 +88,10 @@ for ((gpu=0; gpu<NUM_GPUS; gpu++)); do
     echo "unset PYTHONPATH || true" >> "$temp_script"
     # Ensure insightface model cache is writable and persistent
     echo "export INSIGHTFACE_HOME=$OUTPUT_DIR/.insightface" >> "$temp_script"
+    echo "mkdir -p \"$OUTPUT_DIR/.insightface\"" >> "$temp_script"
 
     # Print runtime versions to the log for debugging
-    cat >> "$temp_script" <<'PY'
+cat >> "$temp_script" <<'PY'
 python - <<'PYIN'
 import sys, importlib
 def ver(mod):
@@ -102,11 +103,14 @@ def ver(mod):
 print('Python', sys.version.split()[0], '| numpy', ver('numpy'), '| pandas', ver('pandas'), '| insightface', ver('insightface'), '| onnxruntime', ver('onnxruntime'))
 try:
     import onnxruntime as ort
-    print('ONNX Runtime providers available:', ort.get_available_providers())
-    if 'CUDAExecutionProvider' not in ort.get_available_providers():
-        print('[Warn] CUDAExecutionProvider not available. Install onnxruntime-gpu and ensure CUDA libs in LD_LIBRARY_PATH.')
+    providers = ort.get_available_providers()
+    print('ONNX Runtime providers available:', providers)
+    if 'CUDAExecutionProvider' not in providers:
+        print('[Error] CUDAExecutionProvider not available. Install onnxruntime-gpu and ensure CUDA libs in LD_LIBRARY_PATH.')
+        sys.exit(1)
 except Exception as e:
     print('onnxruntime import failed for provider check:', e)
+    sys.exit(1)
 PYIN
 PY
 
@@ -116,22 +120,18 @@ PY
     # -------------------------------------------
 
     # Prefetch InsightFace models once per session to avoid runtime assert
-    cat >> "$temp_script" <<'PY'
+cat >> "$temp_script" <<'PY'
 python - <<'PYIN'
-import os
+import os, sys
 from face_recognition_global_gallery import create_face_analysis
 try:
     app = create_face_analysis('auto', model_root=os.environ.get('INSIGHTFACE_HOME'), model_name='auto')
-    try:
-        import onnxruntime as ort
-        cuda_ok = 'CUDAExecutionProvider' in ort.get_available_providers()
-    except Exception:
-        cuda_ok = False
-    ctx_id = 0 if cuda_ok else -1
-    app.prepare(ctx_id=ctx_id, det_size=(640, 640))
+    # CUDA-only mode; create_face_analysis enforces CUDA
+    app.prepare(ctx_id=0, det_size=(640, 640))
     print('[Prefetch] InsightFace models prepared successfully.')
 except Exception as e:
-    print('[Prefetch] Warning: model prefetch failed:', e)
+    print('[Prefetch] Error: model prefetch failed:', e)
+    sys.exit(1)
 PYIN
 PY
 

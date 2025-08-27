@@ -66,16 +66,16 @@ def create_face_analysis(preferred_provider: str, model_root: Optional[str] = No
         available = ort.get_available_providers()
         print(f"ONNX Runtime providers available: {available}")
         cuda_available = "CUDAExecutionProvider" in available
+        # Enforce CUDA only
         if provider_to_use == "auto":
-            provider_to_use = "CUDAExecutionProvider" if cuda_available else "CPUExecutionProvider"
-        if provider_to_use not in available:
-            warnings.warn(
-                f"Requested provider '{provider_to_use}' not in available providers; using CPUExecutionProvider."
+            provider_to_use = "CUDAExecutionProvider"
+        if provider_to_use != "CUDAExecutionProvider" or not cuda_available:
+            raise RuntimeError(
+                "CUDAExecutionProvider not available. Install onnxruntime-gpu and ensure CUDA is properly configured."
             )
-            provider_to_use = "CPUExecutionProvider"
     except Exception as e:
-        # onnxruntime not installed or not importable; proceed and let insightface decide
-        print(f"onnxruntime check skipped: {e}")
+        # Fail fast if CUDA EP cannot be verified
+        raise
 
     # Determine model root directory from arg or env
     if model_root is None:
@@ -281,13 +281,8 @@ def save_outputs(video_path, face_data_for_video, output_dir):
 def main(args):
     print("Initializing InsightFace model...")
     app = create_face_analysis(args.execution_provider, model_root=args.insightface_root, model_name=args.insightface_model)
-    # Use GPU ctx_id only if CUDA EP is actually available
-    try:
-        import onnxruntime as ort
-        cuda_ok = 'CUDAExecutionProvider' in ort.get_available_providers()
-    except Exception:
-        cuda_ok = False
-    ctx_id = 0 if (cuda_ok and args.execution_provider in ("auto", "CUDAExecutionProvider")) else -1
+    # CUDA-only mode
+    ctx_id = 0
     app.prepare(ctx_id=ctx_id, det_size=(640, 640))
     
     # Check if the video file exists
@@ -394,8 +389,8 @@ if __name__ == "__main__":
         '--execution_provider',
         type=str,
         default='auto',
-        choices=['auto', 'CUDAExecutionProvider', 'CPUExecutionProvider', 'CoreMLExecutionProvider'],
-        help="ONNX Runtime EP: 'auto' picks CUDA if available, else CPU."
+        choices=['auto', 'CUDAExecutionProvider'],
+        help="ONNX Runtime EP (CUDA required). 'auto' enforces CUDA."
     )
     parser.add_argument('--insightface_root', type=str, default=None, help="Optional cache dir for InsightFace models (defaults to $INSIGHTFACE_HOME).")
     parser.add_argument('--insightface_model', type=str, default='auto', help="InsightFace model pack: auto|buffalo_l|antelopev2|antelope")
