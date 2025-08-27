@@ -86,9 +86,9 @@ for ((gpu=0; gpu<NUM_GPUS; gpu++)); do
     # Ensure user-site packages don't shadow the env (avoids numpy/pandas ABI mismatches)
     echo "export PYTHONNOUSERSITE=1" >> "$temp_script"
     echo "unset PYTHONPATH || true" >> "$temp_script"
-    # Ensure insightface model cache is writable and persistent
-    echo "export INSIGHTFACE_HOME=$OUTPUT_DIR/.insightface" >> "$temp_script"
-    echo "mkdir -p \"$OUTPUT_DIR/.insightface\"" >> "$temp_script"
+    # Ensure insightface model cache is set; respect user-provided value if present
+    echo 'export INSIGHTFACE_HOME="${INSIGHTFACE_HOME:-'"$OUTPUT_DIR/.insightface"'}"' >> "$temp_script"
+    echo 'mkdir -p "$INSIGHTFACE_HOME"' >> "$temp_script"
 
     # Print runtime versions to the log for debugging
     cat >> "$temp_script" <<'PY'
