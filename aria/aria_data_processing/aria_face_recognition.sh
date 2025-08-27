@@ -4,7 +4,7 @@
 BASE_DIR="/mas/robots/prg-aria/dataset/"
 OUTPUT_DIR="/mas/robots/prg-aria/processed_face_recognition_videos/"
 NUM_GPUS=4
-CONDA_ENV_NAME="ego-dataset"
+CONDA_ENV_NAME="ego-datasets"
 CUDA_LIB_PATH="/usr/local/cuda-11.8/lib64"
 
 # --- Script Start ---

@@ -5,7 +5,7 @@ set -Eeuo pipefail
 BASE_DIR="/mas/robots/prg-ego4d/raw/v2/full_scale.gaze/"
 OUTPUT_DIR="/mas/robots/prg-ego4d/processed_face_recognition_videos/"
 NUM_GPUS=4
-CONDA_ENV_NAME="ego-dataset"
+CONDA_ENV_NAME="ego-datasets"
 CUDA_LIB_PATH="/usr/local/cuda-11.8/lib64"
 GROUND_TRUTH_DIR="/mas/robots/prg-ego4d/face_detection/"
 
