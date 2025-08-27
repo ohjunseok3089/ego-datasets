@@ -13,6 +13,7 @@ import glob
 import time
 import argparse
 from typing import Optional
+import shutil
 
 
 def _pick_insightface_pack(user_choice: Optional[str] = None) -> str:
@@ -77,14 +78,16 @@ def create_face_analysis(preferred_provider: str, model_root: Optional[str] = No
         model_root = os.environ.get("INSIGHTFACE_HOME")
 
     # Initialize FaceAnalysis exactly as supported by insightface>=0.7.3
-    try:
-        pack = model_name if model_name and model_name != "auto" else "antelopev2"
-        print(f"Using InsightFace pack: {pack} with provider {provider_to_use}")
+    pack = model_name if model_name and model_name != "auto" else "antelopev2"
+    print(f"Using InsightFace pack: {pack} with provider {provider_to_use}")
+    def _init_face_analysis():
         if model_root:
             return FaceAnalysis(name=pack, providers=[provider_to_use], root=model_root)
         return FaceAnalysis(name=pack, providers=[provider_to_use])
+    try:
+        return _init_face_analysis()
     except (TypeError, AssertionError, RuntimeError) as e:
-        # Commonly: unsupported kwargs or missing models in very old versions
+        # Commonly: missing/corrupted downloaded model pack causing 'assert "detection" in self.models'
         msg = str(e)
         print(f"InsightFace initialization failed: {msg}")
         print(
@@ -93,6 +96,25 @@ def create_face_analysis(preferred_provider: str, model_root: Optional[str] = No
         print(
             "If running offline, pre-download models by setting INSIGHTFACE_HOME and calling FaceAnalysis(...).prepare()."
         )
+        # Attempt one clean re-download by removing possibly corrupted pack
+        try:
+            root = model_root or os.environ.get("INSIGHTFACE_HOME")
+            if root:
+                pack_dir = os.path.join(root, "models", pack)
+                if os.path.isdir(pack_dir):
+                    print(f"Cleaning corrupted InsightFace pack at: {pack_dir}")
+                    shutil.rmtree(pack_dir, ignore_errors=True)
+                # also remove cached zip if present
+                zip_path = os.path.join(root, "models", f"{pack}.zip")
+                if os.path.isfile(zip_path):
+                    try:
+                        os.remove(zip_path)
+                    except OSError:
+                        pass
+                print("Retrying InsightFace initialization after cleanup...")
+                return _init_face_analysis()
+        except Exception as e2:
+            print(f"Retry after cleanup failed: {e2}")
         raise
 
 def load_ground_truth(ground_truth_path):
