@@ -85,7 +85,7 @@ def run_validation(video_path: str, ground_truth_dir: str, skip_face_test: bool 
 
 
 def run_fixed_face_recognition(video_path: str, ground_truth_dir: str, output_dir: str, 
-                              recognition_threshold: float = 0.6) -> bool:
+                              recognition_threshold: float = 0.6, max_frames: int = None) -> bool:
     """Run the fixed face recognition implementation"""
     print("\n🔧 Step 2: Running Fixed Face Recognition...")
     print("="*60)
@@ -98,6 +98,9 @@ def run_fixed_face_recognition(video_path: str, ground_truth_dir: str, output_di
         "--recognition_threshold", str(recognition_threshold),
         "--execution_provider", "auto"
     ]
+    
+    if max_frames is not None:
+        cmd.extend(["--max_frames", str(max_frames)])
     
     try:
         result = subprocess.run(cmd, check=True, capture_output=True, text=True)

@@ -280,6 +280,49 @@ def create_person_prototypes(gt_embeddings_by_person: Dict[int, List[np.ndarray]
     return prototypes, person_ids
 
 
+def assign_detections_to_prototypes_greedy(detections: List[dict], prototypes: List[np.ndarray], 
+                                          person_ids: List[int], threshold: float = 0.4) -> List[Tuple[int, int, float]]:
+    """
+    Greedy assignment based on highest confidence first.
+    Returns list of (detection_idx, prototype_idx, similarity_score)
+    """
+    if not detections or not prototypes:
+        return []
+    
+    # Compute all similarities
+    detection_embeddings = np.stack([d['embedding'] for d in detections])
+    prototype_matrix = np.stack(prototypes)
+    similarities = np.dot(prototype_matrix, detection_embeddings.T)  # (n_prototypes, n_detections)
+    
+    assignments = []
+    used_prototypes = set()
+    used_detections = set()
+    
+    # Greedy assignment: highest similarity first
+    while True:
+        # Mask out already used prototypes/detections
+        masked_similarities = similarities.copy()
+        for p_idx in used_prototypes:
+            masked_similarities[p_idx, :] = -1
+        for d_idx in used_detections:
+            masked_similarities[:, d_idx] = -1
+            
+        # Find best remaining match
+        max_sim = np.max(masked_similarities)
+        if max_sim < threshold:
+            break
+            
+        # Get indices of maximum similarity
+        max_positions = np.where(masked_similarities == max_sim)
+        p_idx, d_idx = max_positions[0][0], max_positions[1][0]  # Take first if multiple
+        
+        assignments.append((d_idx, p_idx, max_sim))
+        used_prototypes.add(p_idx)
+        used_detections.add(d_idx)
+    
+    return assignments
+
+
 def process_all_frames(video_path, model, ground_truth_df: pd.DataFrame, 
                       prototypes: List[np.ndarray], person_ids: List[int], 
                       recognition_threshold: float = 0.6, max_frames=None):
@@ -301,12 +344,6 @@ def process_all_frames(video_path, model, ground_truth_df: pd.DataFrame,
     all_face_data = []
     frame_number = 0
     gt_frames = set(ground_truth_df['frame_number'].unique()) if ground_truth_df is not None else set()
-    
-    # Create numpy array of prototypes for efficient computation
-    if prototypes:
-        prototype_matrix = np.stack(prototypes, axis=0).astype(np.float32)
-    else:
-        prototype_matrix = None
     
     while cap.isOpened() and frame_number < max_frames:
         ret, frame = cap.read()
@@ -343,21 +380,27 @@ def process_all_frames(video_path, model, ground_truth_df: pd.DataFrame,
             # No ground truth for this frame, all detections are unmatched
             unmatched_dets = dets
         
-        # Try to recognize unmatched detections against prototypes
-        if unmatched_dets and prototype_matrix is not None:
-            for det in unmatched_dets:
-                # Compute cosine similarities to all prototypes
-                similarities = np.dot(prototype_matrix, det['embedding'])
-                max_similarity = np.max(similarities)
+        # Try to recognize unmatched detections against prototypes using greedy assignment
+        if unmatched_dets and prototypes:
+            # Use greedy assignment for better multi-person handling
+            assignments = assign_detections_to_prototypes_greedy(
+                unmatched_dets, prototypes, person_ids, threshold=(1 - recognition_threshold)
+            )
+            
+            for det_idx, proto_idx, similarity in assignments:
+                det = unmatched_dets[det_idx].copy()
+                det['person_id'] = str(person_ids[proto_idx])
+                det['source'] = 'recognized'
+                det['confidence'] = float(similarity)
+                all_face_data.append(det)
                 
-                # Use lenient threshold for video quality issues
-                if max_similarity >= (1 - recognition_threshold):  # Convert distance to similarity threshold
-                    best_match_idx = np.argmax(similarities)
-                    det['person_id'] = str(person_ids[best_match_idx])
-                    det['source'] = 'recognized'
-                    det['confidence'] = float(max_similarity)
-                    all_face_data.append(det)
-                # else: leave unmatched (don't add to results)
+            # Log assignment info for debugging
+            if assignments:
+                assigned_persons = [person_ids[proto_idx] for _, proto_idx, _ in assignments]
+                confidences = [sim for _, _, sim in assignments]
+                print(f"    Frame {frame_number}: assigned {len(assignments)} faces to persons {assigned_persons} "
+                      f"(confidences: {[f'{c:.3f}' for c in confidences]})")
+            # else: unassigned detections are left unmatched (don't add to results)
         
         frame_number += 1
     
@@ -530,7 +573,7 @@ if __name__ == "__main__":
     parser.add_argument('--insightface_root', type=str, default=None, help="Optional cache dir for InsightFace models (defaults to $INSIGHTFACE_HOME).")
     parser.add_argument('--insightface_model', type=str, default='antelopev2', choices=['antelopev2','buffalo_l','antelope'], help="InsightFace model pack (default: antelopev2)")
     parser.add_argument('--ground_truth_dir', type=str, required=True, help="Directory containing ground truth CSV files (REQUIRED).")
-    parser.add_argument('--max_frames', type=int, default=36000, help="Maximum frames to process (default: 36000 = 20 minutes at 30fps).")
+    parser.add_argument('--max_frames', type=int, default=None, help="Maximum frames to process (default: None = process entire video).")
     
     args = parser.parse_args()
     

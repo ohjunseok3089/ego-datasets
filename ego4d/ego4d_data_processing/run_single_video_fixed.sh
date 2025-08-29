@@ -153,8 +153,7 @@ if CUDA_VISIBLE_DEVICES=$GPU_ID python face_recognition_fixed.py \
     --insightface_model antelopev2 \
     --output_dir "$OUTPUT_DIR" \
     --ground_truth_dir "$GROUND_TRUTH_DIR" \
-    --recognition_threshold $RECOGNITION_THRESHOLD \
-    --max_frames 36000; then
+    --recognition_threshold $RECOGNITION_THRESHOLD; then
     echo ""
     echo "✅ Face recognition COMPLETED successfully!"
 else
