@@ -261,26 +261,141 @@ def extract_gt_embeddings(video_path, model, ground_truth_df: pd.DataFrame) -> D
     return gt_embeddings_by_person
 
 
-def create_person_prototypes(gt_embeddings_by_person: Dict[int, List[np.ndarray]]) -> Tuple[List[np.ndarray], List[int]]:
+def create_person_prototypes(validated_gt_by_person: Dict[int, List[dict]]) -> Tuple[List[np.ndarray], List[int]]:
     """
-    Create prototype embeddings for each person from ground truth embeddings.
+    Create prototype embeddings for each person from validated ground truth embeddings.
     Returns: (prototypes, person_ids)
     """
     prototypes = []
     person_ids = []
     
-    for person_id in sorted(gt_embeddings_by_person.keys()):
-        embeddings = gt_embeddings_by_person[person_id]
-        if embeddings:
-            # Average embeddings and L2 normalize
-            proto = np.mean(np.stack(embeddings, axis=0), axis=0)
-            norm = np.linalg.norm(proto) + 1e-8
-            proto = proto / norm
-            prototypes.append(proto)
-            person_ids.append(person_id)
+    for person_id in sorted(validated_gt_by_person.keys()):
+        face_items = validated_gt_by_person[person_id]
+        if face_items:
+            # Extract embeddings from face items
+            embeddings = [item['embedding'] for item in face_items if 'embedding' in item]
+            if embeddings:
+                # Average embeddings and L2 normalize
+                proto = np.mean(np.stack(embeddings, axis=0), axis=0)
+                norm = np.linalg.norm(proto) + 1e-8
+                proto = proto / norm
+                prototypes.append(proto)
+                person_ids.append(person_id)
+                
+                # Count different sources
+                source_counts = defaultdict(int)
+                for item in face_items:
+                    source = item.get('source', 'unknown')
+                    source_counts[source] += 1
+                
+                print(f"    Person {person_id}: {len(embeddings)} embeddings, sources: {dict(source_counts)}")
     
     print(f"  Created prototypes for persons: {person_ids}")
     return prototypes, person_ids
+
+
+def validate_gt_embeddings_and_cluster(gt_face_data: List[dict], min_cluster_size: int = 3) -> Tuple[Dict[int, List[dict]], Dict[int, int]]:
+    """
+    Validate GT embeddings using clustering to detect mislabeled faces.
+    Returns: (validated_gt_by_person, correction_mapping)
+    """
+    print(f"  🔍 Validating GT embeddings using clustering...")
+    
+    if not HDBSCAN_AVAILABLE:
+        print("  ⚠️  HDBSCAN not available - skipping GT validation")
+        # Fallback: group by person_id without validation
+        by_person = defaultdict(list)
+        for item in gt_face_data:
+            if 'person_id' in item:
+                by_person[int(item['person_id'])].append(item)
+        return dict(by_person), {}
+    
+    # Collect all GT embeddings with metadata
+    embeddings = []
+    metadata = []
+    for item in gt_face_data:
+        if 'person_id' in item and 'embedding' in item:
+            embeddings.append(item['embedding'])
+            metadata.append({
+                'original_person_id': int(item['person_id']),
+                'frame_number': item['frame_number'],
+                'data': item
+            })
+    
+    if len(embeddings) < min_cluster_size:
+        print(f"  ⚠️  Too few GT embeddings ({len(embeddings)}) for clustering")
+        by_person = defaultdict(list)
+        for item in gt_face_data:
+            if 'person_id' in item:
+                by_person[int(item['person_id'])].append(item)
+        return dict(by_person), {}
+    
+    # Perform HDBSCAN clustering
+    embeddings_array = np.stack(embeddings)
+    clusterer = hdbscan.HDBSCAN(min_cluster_size=min_cluster_size, metric='euclidean')
+    cluster_labels = clusterer.fit_predict(embeddings_array)
+    
+    unique_clusters = set(cluster_labels) - {-1}  # Exclude noise (-1)
+    print(f"    Found {len(unique_clusters)} clusters from {len(embeddings)} GT embeddings")
+    
+    # Analyze cluster vs original person_id consistency
+    cluster_to_person_votes = defaultdict(lambda: defaultdict(int))
+    for i, cluster_id in enumerate(cluster_labels):
+        if cluster_id != -1:  # Not noise
+            original_pid = metadata[i]['original_person_id']
+            cluster_to_person_votes[cluster_id][original_pid] += 1
+    
+    # Determine cluster-to-person mapping
+    cluster_to_corrected_person = {}
+    correction_mapping = {}  # original_pid -> corrected_pid
+    
+    for cluster_id, person_votes in cluster_to_person_votes.items():
+        # Find most common person_id in this cluster
+        most_common_pid = max(person_votes.items(), key=lambda x: x[1])[0]
+        cluster_to_corrected_person[cluster_id] = most_common_pid
+        
+        # Check for mislabeled faces in this cluster
+        total_in_cluster = sum(person_votes.values())
+        for pid, count in person_votes.items():
+            if pid != most_common_pid and count > 0:
+                correction_ratio = count / total_in_cluster
+                if correction_ratio > 0.1:  # More than 10% mislabeled
+                    print(f"    ⚠️  Cluster {cluster_id}: {count}/{total_in_cluster} faces labeled as P{pid} but should be P{most_common_pid}")
+                    correction_mapping[pid] = most_common_pid
+    
+    # Create validated GT data with corrections
+    validated_gt_by_person = defaultdict(list)
+    corrected_count = 0
+    
+    for i, cluster_id in enumerate(cluster_labels):
+        item = metadata[i]['data'].copy()
+        original_pid = metadata[i]['original_person_id']
+        
+        if cluster_id == -1:
+            # Noise - keep original label but mark as uncertain
+            item['source'] = 'ground_truth_uncertain'
+            item['correction'] = 'noise'
+            validated_gt_by_person[original_pid].append(item)
+        else:
+            # Valid cluster
+            corrected_pid = cluster_to_corrected_person[cluster_id]
+            if original_pid != corrected_pid:
+                # Mislabeled - correct it
+                item['person_id'] = str(corrected_pid)
+                item['source'] = 'ground_truth_corrected'
+                item['correction'] = f'p{original_pid}_to_p{corrected_pid}'
+                corrected_count += 1
+            else:
+                # Correctly labeled
+                item['source'] = 'ground_truth'
+                item['correction'] = 'none'
+            
+            validated_gt_by_person[corrected_pid].append(item)
+    
+    print(f"    ✅ GT Validation complete: {corrected_count} faces corrected")
+    print(f"    Final person distribution: {dict((pid, len(items)) for pid, items in validated_gt_by_person.items())}")
+    
+    return dict(validated_gt_by_person), correction_mapping
 
 
 def assign_detections_to_prototypes_greedy(detections: List[dict], prototypes: List[np.ndarray], 
@@ -328,6 +443,7 @@ def assign_detections_to_prototypes_greedy(detections: List[dict], prototypes: L
 
 def process_all_frames(video_path, model, ground_truth_df: pd.DataFrame, 
                       prototypes: List[np.ndarray], person_ids: List[int], 
+                      validated_gt_by_person: Dict[int, List[dict]] = None,
                       recognition_threshold: float = 0.6, max_frames=None):
     """
     Phase 2: Process all frames, using GT labels where available and matching against prototypes elsewhere.
@@ -363,9 +479,48 @@ def process_all_frames(video_path, model, ground_truth_df: pd.DataFrame,
                 'embedding': face.normed_embedding,
             })
         
-        # Check if this frame has ground truth
-        if frame_number in gt_frames:
-            # Use ground truth labels
+        # Check if this frame has validated ground truth
+        if frame_number in gt_frames and validated_gt_by_person:
+            # Use validated ground truth labels (including corrections)
+            validated_gt_for_frame = []
+            for person_id, face_items in validated_gt_by_person.items():
+                for face_item in face_items:
+                    if face_item['frame_number'] == frame_number:
+                        validated_gt_for_frame.append(face_item)
+            
+            if validated_gt_for_frame:
+                # Convert validated GT to DataFrame format for IoU matching
+                gt_data = []
+                for face_item in validated_gt_for_frame:
+                    gt_data.append({
+                        'person_id': int(face_item['person_id']),
+                        'x1': face_item['bbox'][0],
+                        'y1': face_item['bbox'][1], 
+                        'x2': face_item['bbox'][2],
+                        'y2': face_item['bbox'][3],
+                        'source': face_item.get('source', 'ground_truth'),
+                        'correction': face_item.get('correction', 'none')
+                    })
+                frame_gt_df = pd.DataFrame(gt_data)
+                
+                matches = assign_detections_to_gt(dets, frame_gt_df, iou_threshold=0.3)
+                
+                for det_idx, gt_idx in matches:
+                    item = dets[det_idx].copy()
+                    gt_row = frame_gt_df.iloc[gt_idx]
+                    item['person_id'] = str(int(gt_row['person_id']))
+                    item['source'] = gt_row['source']  # ground_truth, ground_truth_corrected, or ground_truth_uncertain
+                    item['correction'] = gt_row['correction']
+                    item['confidence'] = 1.0
+                    all_face_data.append(item)
+                
+                # Keep unmatched detections for potential recognition
+                matched_indices = set(det_idx for det_idx, _ in matches)
+                unmatched_dets = [dets[i] for i in range(len(dets)) if i not in matched_indices]
+            else:
+                unmatched_dets = dets
+        elif frame_number in gt_frames:
+            # Fallback to original GT if validation not available
             frame_gt = ground_truth_df[ground_truth_df['frame_number'] == frame_number]
             matches = assign_detections_to_gt(dets, frame_gt, iou_threshold=0.3)
             
@@ -374,6 +529,8 @@ def process_all_frames(video_path, model, ground_truth_df: pd.DataFrame,
                 gt_row = frame_gt.iloc[gt_idx]
                 item['person_id'] = str(int(gt_row['person_id']))
                 item['source'] = 'ground_truth'
+                item['correction'] = 'none'
+                item['confidence'] = 1.0
                 all_face_data.append(item)
             
             # Keep unmatched detections for potential recognition
@@ -395,6 +552,7 @@ def process_all_frames(video_path, model, ground_truth_df: pd.DataFrame,
                 det['person_id'] = str(person_ids[proto_idx])
                 det['source'] = 'recognized'
                 det['confidence'] = float(similarity)
+                det['correction'] = 'none'  # Recognized faces have no correction
                 all_face_data.append(det)
                 
             # Log assignment info for debugging
@@ -430,16 +588,17 @@ def save_outputs(video_path, face_data_for_video, output_dir):
     output_csv_path = os.path.join(output_dir, f"{base_name}_fixed_face_recognition.csv")
     output_video_path = os.path.join(output_dir, f"{base_name}_fixed_face_recognition.mp4")
 
-    # Save CSV with additional metadata
+    # Save CSV with additional metadata including correction info
     with open(output_csv_path, 'w', newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(['frame_number', 'person_id', 'x1', 'y1', 'x2', 'y2', 'source', 'confidence'])
+        writer.writerow(['frame_number', 'person_id', 'x1', 'y1', 'x2', 'y2', 'source', 'confidence', 'correction'])
         for data in face_data_for_video:
             if data.get('person_id', 'unknown') != 'unknown':
                 x1, y1, x2, y2 = data['bbox']
                 source = data.get('source', 'unknown')
                 confidence = data.get('confidence', 1.0)
-                writer.writerow([data['frame_number'], data['person_id'], x1, y1, x2, y2, source, confidence])
+                correction = data.get('correction', 'none')
+                writer.writerow([data['frame_number'], data['person_id'], x1, y1, x2, y2, source, confidence, correction])
     print(f"    - Saved annotations to: {output_csv_path}")
 
     # Create annotated video
@@ -466,14 +625,29 @@ def save_outputs(video_path, face_data_for_video, output_dir):
                     person_id = data['person_id']
                     source = data.get('source', '')
                     confidence = data.get('confidence', 1.0)
+                    correction = data.get('correction', 'none')
                     
-                    # Color code by source: green for GT, blue for recognized
-                    color = (0, 255, 0) if source == 'ground_truth' else (255, 0, 0)
+                    # Color code by source and correction status
+                    if source == 'ground_truth':
+                        color = (0, 255, 0)  # 🟢 Green: Correct ground truth
+                    elif source == 'ground_truth_corrected':
+                        color = (0, 165, 255)  # 🟠 Orange: Corrected ground truth (BGR format)
+                    elif source == 'ground_truth_uncertain':
+                        color = (0, 255, 255)  # 🟡 Yellow: Uncertain ground truth
+                    elif source == 'recognized':
+                        color = (255, 0, 0)  # 🔵 Blue: Recognized face
+                    else:
+                        color = (128, 128, 128)  # ⚪ Gray: Unknown
                     
                     cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), color, 2)
+                    
+                    # Create label with correction info
                     label = f"P{person_id}"
                     if source == 'recognized':
                         label += f" ({confidence:.2f})"
+                    elif correction != 'none' and correction != 'noise':
+                        label += f" [{correction}]"
+                    
                     cv2.putText(frame, label, (bbox[0], bbox[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
         
         out.write(frame)
@@ -514,27 +688,35 @@ def main(args):
         print("Please provide --ground_truth_dir argument.")
         return
     
-    print("\n=== PHASE 1: Extract Ground Truth Embeddings ===")
+    print("\n=== PHASE 1: Extract & Validate Ground Truth Embeddings ===")
     start_time = time.time()
     
-    # Phase 1: Extract embeddings only from ground truth frames
-    gt_embeddings_by_person = extract_gt_embeddings(args.video_path, app, ground_truth_df)
+    # Phase 1a: Extract embeddings only from ground truth frames
+    gt_face_data = extract_embeddings(args.video_path, app, max_frames=args.max_frames, ground_truth_df=ground_truth_df, keep_unmatched=False)
     
-    if not gt_embeddings_by_person:
-        print("ERROR: No ground truth embeddings found!")
+    if not gt_face_data:
+        print("ERROR: No ground truth face data found!")
         print("Please check that:")
         print("1. Ground truth file contains valid face annotations")
         print("2. Face detection is working properly")
         print("3. IoU matching threshold is appropriate")
         return
     
-    # Create person prototypes from ground truth embeddings
-    prototypes, person_ids = create_person_prototypes(gt_embeddings_by_person)
+    # Phase 1b: Validate GT embeddings using clustering to detect mislabeled faces
+    validated_gt_by_person, correction_mapping = validate_gt_embeddings_and_cluster(gt_face_data, min_cluster_size=3)
+    
+    if not validated_gt_by_person:
+        print("ERROR: No validated ground truth embeddings found!")
+        return
+    
+    # Phase 1c: Create person prototypes from validated ground truth embeddings
+    prototypes, person_ids = create_person_prototypes(validated_gt_by_person)
     
     print(f"\n=== PHASE 2: Process All Frames with GT-based Recognition ===")
-    # Phase 2: Process all frames using GT labels where available and recognition elsewhere
+    # Phase 2: Process all frames using validated GT labels where available and recognition elsewhere
     all_face_data = process_all_frames(
         args.video_path, app, ground_truth_df, prototypes, person_ids, 
+        validated_gt_by_person=validated_gt_by_person,
         recognition_threshold=args.recognition_threshold, max_frames=args.max_frames
     )
     
