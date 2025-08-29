@@ -17,7 +17,7 @@ import os
 import glob
 import time
 import argparse
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Dict
 import shutil
 from scipy.optimize import linear_sum_assignment
 
@@ -204,8 +204,89 @@ def assign_detections_to_gt(dets: List[dict], frame_gt_df: pd.DataFrame, iou_thr
             matches.append((d, g))  # det index, gt index
     return matches
 
-def extract_embeddings(video_path, model, max_frames=None, ground_truth_df=None, keep_unmatched: bool = False):
-    print(f"  Extracting embeddings from: {os.path.basename(video_path)}...")
+
+def extract_gt_embeddings(video_path, model, ground_truth_df: pd.DataFrame) -> Dict[int, List[np.ndarray]]:
+    """
+    Phase 1: Extract embeddings only from ground truth frames and collect by person_id.
+    Returns: Dict[person_id, List[embeddings]]
+    """
+    print(f"  Phase 1: Extracting GT embeddings from: {os.path.basename(video_path)}...")
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        print(f"    Error: Could not open {video_path}")
+        return {}
+    
+    gt_embeddings_by_person = defaultdict(list)
+    gt_frames = set(ground_truth_df['frame_number'].unique())
+    frame_number = 0
+    
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret: 
+            break
+            
+        # Only process frames that have ground truth annotations
+        if frame_number not in gt_frames:
+            frame_number += 1
+            continue
+            
+        faces = model.get(frame)
+        dets = []
+        for face in faces:
+            dets.append({
+                'bbox': face.bbox.astype(int),
+                'embedding': face.normed_embedding,
+            })
+        
+        frame_gt = ground_truth_df[ground_truth_df['frame_number'] == frame_number]
+        matches = assign_detections_to_gt(dets, frame_gt, iou_threshold=0.3)
+        
+        for det_idx, gt_idx in matches:
+            item = dets[det_idx]
+            gt_row = frame_gt.iloc[gt_idx]
+            person_id = int(gt_row['person_id'])
+            gt_embeddings_by_person[person_id].append(item['embedding'])
+            
+        frame_number += 1
+    
+    cap.release()
+    
+    print(f"    Collected GT embeddings for {len(gt_embeddings_by_person)} people:")
+    for pid, embeddings in gt_embeddings_by_person.items():
+        print(f"      Person {pid}: {len(embeddings)} embeddings")
+    
+    return gt_embeddings_by_person
+
+
+def create_person_prototypes(gt_embeddings_by_person: Dict[int, List[np.ndarray]]) -> Tuple[List[np.ndarray], List[int]]:
+    """
+    Create prototype embeddings for each person from ground truth embeddings.
+    Returns: (prototypes, person_ids)
+    """
+    prototypes = []
+    person_ids = []
+    
+    for person_id in sorted(gt_embeddings_by_person.keys()):
+        embeddings = gt_embeddings_by_person[person_id]
+        if embeddings:
+            # Average embeddings and L2 normalize
+            proto = np.mean(np.stack(embeddings, axis=0), axis=0)
+            norm = np.linalg.norm(proto) + 1e-8
+            proto = proto / norm
+            prototypes.append(proto)
+            person_ids.append(person_id)
+    
+    print(f"  Created prototypes for persons: {person_ids}")
+    return prototypes, person_ids
+
+
+def process_all_frames(video_path, model, ground_truth_df: pd.DataFrame, 
+                      prototypes: List[np.ndarray], person_ids: List[int], 
+                      recognition_threshold: float = 0.6, max_frames=None):
+    """
+    Phase 2: Process all frames, using GT labels where available and matching against prototypes elsewhere.
+    """
+    print(f"  Phase 2: Processing all frames from: {os.path.basename(video_path)}...")
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         print(f"    Error: Could not open {video_path}")
@@ -213,17 +294,25 @@ def extract_embeddings(video_path, model, max_frames=None, ground_truth_df=None,
     
     # Set maximum frames limit
     if max_frames is None:
-        # No limit - process entire video
         max_frames = float('inf')
     elif max_frames == "MAX":
         max_frames = float('inf')
-    # Otherwise use the specified limit (default: 36000 for 20 minutes at 30fps)
     
-    face_data = []
+    all_face_data = []
     frame_number = 0
+    gt_frames = set(ground_truth_df['frame_number'].unique()) if ground_truth_df is not None else set()
+    
+    # Create numpy array of prototypes for efficient computation
+    if prototypes:
+        prototype_matrix = np.stack(prototypes, axis=0).astype(np.float32)
+    else:
+        prototype_matrix = None
+    
     while cap.isOpened() and frame_number < max_frames:
         ret, frame = cap.read()
-        if not ret: break
+        if not ret: 
+            break
+        
         faces = model.get(frame)
         dets = []
         for face in faces:
@@ -233,40 +322,81 @@ def extract_embeddings(video_path, model, max_frames=None, ground_truth_df=None,
                 'bbox': face.bbox.astype(int),
                 'embedding': face.normed_embedding,
             })
-        if ground_truth_df is not None:
+        
+        # Check if this frame has ground truth
+        if frame_number in gt_frames:
+            # Use ground truth labels
             frame_gt = ground_truth_df[ground_truth_df['frame_number'] == frame_number]
             matches = assign_detections_to_gt(dets, frame_gt, iou_threshold=0.3)
-            matched_det_indices = set()
+            
             for det_idx, gt_idx in matches:
-                item = dets[det_idx]
+                item = dets[det_idx].copy()
                 gt_row = frame_gt.iloc[gt_idx]
                 item['person_id'] = str(int(gt_row['person_id']))
-                face_data.append(item)
-                matched_det_indices.add(det_idx)
-            if keep_unmatched:
-                for i, item in enumerate(dets):
-                    if i not in matched_det_indices:
-                        face_data.append(item)
+                item['source'] = 'ground_truth'
+                all_face_data.append(item)
+            
+            # Keep unmatched detections for potential recognition
+            matched_indices = set(det_idx for det_idx, _ in matches)
+            unmatched_dets = [dets[i] for i in range(len(dets)) if i not in matched_indices]
         else:
-            face_data.extend(dets)
+            # No ground truth for this frame, all detections are unmatched
+            unmatched_dets = dets
+        
+        # Try to recognize unmatched detections against prototypes
+        if unmatched_dets and prototype_matrix is not None:
+            for det in unmatched_dets:
+                # Compute cosine similarities to all prototypes
+                similarities = np.dot(prototype_matrix, det['embedding'])
+                max_similarity = np.max(similarities)
+                
+                # Use lenient threshold for video quality issues
+                if max_similarity >= (1 - recognition_threshold):  # Convert distance to similarity threshold
+                    best_match_idx = np.argmax(similarities)
+                    det['person_id'] = str(person_ids[best_match_idx])
+                    det['source'] = 'recognized'
+                    det['confidence'] = float(max_similarity)
+                    all_face_data.append(det)
+                # else: leave unmatched (don't add to results)
+        
         frame_number += 1
+    
     cap.release()
-    return face_data
+    print(f"    Processed {frame_number} frames, found {len(all_face_data)} labeled faces")
+    
+    # Print statistics
+    by_source = defaultdict(int)
+    by_person = defaultdict(int)
+    for item in all_face_data:
+        source = item.get('source', 'unknown')
+        person_id = item.get('person_id', 'unknown')
+        by_source[source] += 1
+        by_person[person_id] += 1
+    
+    print(f"    Source breakdown: {dict(by_source)}")
+    print(f"    Person breakdown: {dict(by_person)}")
+    
+    return all_face_data
+
 
 def save_outputs(video_path, face_data_for_video, output_dir):
     base_name = os.path.splitext(os.path.basename(video_path))[0]
-    output_csv_path = os.path.join(output_dir, f"{base_name}_global_gallery.csv")
-    output_video_path = os.path.join(output_dir, f"{base_name}_global_gallery.mp4")
+    output_csv_path = os.path.join(output_dir, f"{base_name}_fixed_face_recognition.csv")
+    output_video_path = os.path.join(output_dir, f"{base_name}_fixed_face_recognition.mp4")
 
+    # Save CSV with additional metadata
     with open(output_csv_path, 'w', newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(['frame_number', 'person_id', 'x1', 'y1', 'x2', 'y2'])
+        writer.writerow(['frame_number', 'person_id', 'x1', 'y1', 'x2', 'y2', 'source', 'confidence'])
         for data in face_data_for_video:
             if data.get('person_id', 'unknown') != 'unknown':
                 x1, y1, x2, y2 = data['bbox']
-                writer.writerow([data['frame_number'], data['person_id'], x1, y1, x2, y2])
+                source = data.get('source', 'unknown')
+                confidence = data.get('confidence', 1.0)
+                writer.writerow([data['frame_number'], data['person_id'], x1, y1, x2, y2, source, confidence])
     print(f"    - Saved annotations to: {output_csv_path}")
 
+    # Create annotated video
     cap = cv2.VideoCapture(video_path)
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     fps = cap.get(cv2.CAP_PROP_FPS)
@@ -288,8 +418,17 @@ def save_outputs(video_path, face_data_for_video, output_dir):
                 if data.get('person_id', 'unknown') != 'unknown':
                     bbox = data['bbox']
                     person_id = data['person_id']
-                    cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 255, 0), 2)
-                    cv2.putText(frame, person_id, (bbox[0], bbox[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+                    source = data.get('source', '')
+                    confidence = data.get('confidence', 1.0)
+                    
+                    # Color code by source: green for GT, blue for recognized
+                    color = (0, 255, 0) if source == 'ground_truth' else (255, 0, 0)
+                    
+                    cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), color, 2)
+                    label = f"P{person_id}"
+                    if source == 'recognized':
+                        label += f" ({confidence:.2f})"
+                    cv2.putText(frame, label, (bbox[0], bbox[1] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, color, 2)
         
         out.write(frame)
         frame_number += 1
@@ -297,6 +436,7 @@ def save_outputs(video_path, face_data_for_video, output_dir):
     cap.release()
     out.release()
     print(f"    - Saved labeled video to: {output_video_path}")
+
 
 def main(args):
     print("Initializing InsightFace model...")
@@ -310,15 +450,9 @@ def main(args):
         print(f"Error: Video file '{args.video_path}' does not exist!")
         return
     
-    # For single video, use it as both gallery source and target
-    video_files = [args.video_path]
-    
-    print(f"\nProcessing single video file: {os.path.basename(args.video_path)}")
+    print(f"\nProcessing video file: {os.path.basename(args.video_path)}")
 
-    print("\n--- CHECKING GROUND TRUTH INJECTION ---")
-    start_time = time.time()
-    
-    # Load ground truth - THIS IS NOW REQUIRED
+    # Load ground truth - this is REQUIRED for the new approach
     ground_truth_df = None
     if args.ground_truth_dir:
         video_basename = os.path.splitext(os.path.basename(args.video_path))[0]
@@ -326,134 +460,66 @@ def main(args):
         ground_truth_df = load_ground_truth(ground_truth_path)
         
         if ground_truth_df is None or ground_truth_df.empty:
-            print("❌ ERROR: Ground truth is REQUIRED but not found or empty!")
-            print("❌ Cannot proceed without ground truth data to prevent person ID issues (11, 12, etc.)")
-            print("❌ Please ensure ground truth CSV file exists and contains valid data.")
+            print("ERROR: Ground truth is required but not found or empty!")
+            print("Cannot proceed without ground truth data.")
             return
-        else:
-            print(f"✅ Ground truth successfully loaded: {len(ground_truth_df)} annotations")
-            print(f"✅ Unique person IDs in GT: {sorted(ground_truth_df['person_id'].unique())}")
     else:
-        print("❌ ERROR: Ground truth directory is REQUIRED!")
-        print("❌ Please provide --ground_truth_dir argument.")
-        print("❌ This prevents spurious person IDs like 11, 12, etc.")
+        print("ERROR: Ground truth directory is required!")
+        print("Please provide --ground_truth_dir argument.")
         return
     
-    first_video_path = video_files[0]
-    print(f"Step 1: Seeding gallery from GT-labeled frames only...")
-    # Phase 1: build gallery strictly from GT-labeled detections across the video
-    part1_data = extract_embeddings(first_video_path, app, max_frames=args.max_frames, ground_truth_df=ground_truth_df, keep_unmatched=False)
+    print("\n=== PHASE 1: Extract Ground Truth Embeddings ===")
+    start_time = time.time()
     
-    gallery_embeddings = []
-    gallery_ids = []
-    if not part1_data:
-        print("Error: No faces found in the first video to create a gallery. Aborting this group.")
+    # Phase 1: Extract embeddings only from ground truth frames
+    gt_embeddings_by_person = extract_gt_embeddings(args.video_path, app, ground_truth_df)
+    
+    if not gt_embeddings_by_person:
+        print("ERROR: No ground truth embeddings found!")
+        print("Please check that:")
+        print("1. Ground truth file contains valid face annotations")
+        print("2. Face detection is working properly")
+        print("3. IoU matching threshold is appropriate")
         return
-
-    if ground_truth_df is not None:
-        # Build gallery directly from GT-labeled embeddings (authoritative IDs)
-        by_id = defaultdict(list)
-        for d in part1_data:
-            if 'person_id' in d:
-                by_id[str(d['person_id'])].append(d['embedding'])
-        for pid, embs in sorted(by_id.items(), key=lambda x: int(x[0])):
-            # mean then L2-normalize prototype
-            proto = np.mean(np.stack(embs, axis=0), axis=0)
-            norm = np.linalg.norm(proto) + 1e-8
-            proto = proto / norm
-            gallery_embeddings.append(proto)
-            gallery_ids.append(pid)
-        print(f"Gallery built from GT IDs: {gallery_ids}")
-    else:
-        if not HDBSCAN_AVAILABLE:
-            print("HDBSCAN not available; cannot cluster without ground truth. Aborting.")
-            return
-        part1_embeddings = np.array([data['embedding'] for data in part1_data])
-        # Cluster to form gallery if GT not available
-        max_gt_person_id = 2
-        best_clusterer = None
-        best_labels = None
-        best_score = float('inf')
-        for min_size in [args.min_cluster_size, args.min_cluster_size * 2, args.min_cluster_size * 4]:
-            clusterer = hdbscan.HDBSCAN(min_cluster_size=min_size, metric='euclidean')
-            labels = clusterer.fit_predict(part1_embeddings)
-            num_clusters = len(set(labels)) - (1 if -1 in labels else 0)
-            score = abs(num_clusters - max_gt_person_id)
-            print(f"    Trying min_cluster_size={min_size}: {num_clusters} clusters, score={score}")
-            if score < best_score:
-                best_score = score
-                best_clusterer = clusterer
-                best_labels = labels
-        labels = best_labels
-        num_clusters = len(set(labels)) - (1 if -1 in labels else 0)
-        for i in range(num_clusters):
-            cluster_indices = np.where(labels == i)[0]
-            proto = np.mean(part1_embeddings[cluster_indices], axis=0)
-            norm = np.linalg.norm(proto) + 1e-8
-            proto = proto / norm
-            gallery_embeddings.append(proto)
-            gallery_ids.append(str(i + 1))
-        print(f"Gallery created with {len(gallery_ids)} unique people: {gallery_ids}")
-
-    # Map for fast reservation of gallery slots by GT labels
-    id_to_index = {pid: j for j, pid in enumerate(gallery_ids)}
-
-    for video_path in video_files:
-        print(f"\nStep 2: Processing '{os.path.basename(video_path)}' using seeded gallery (full video)...")
-        # Phase 2: extract all detections; if GT exists, matched ones are labeled, others kept for recognition
-        video_data = extract_embeddings(video_path, app, max_frames=args.max_frames, ground_truth_df=ground_truth_df, keep_unmatched=True)
-        if not video_data:
-            continue
-
-        # Assign unique IDs per frame using Hungarian only for unlabeled detections
-        by_frame = defaultdict(list)
-        for idx, d in enumerate(video_data):
-            by_frame[d['frame_number']].append((idx, d))
-        for frame_num, items in by_frame.items():
-            import numpy as np
-            # Reserve gallery indices already present due to GT labels in this frame
-            reserved = set()
-            for _, d in items:
-                pid = d.get('person_id')
-                if pid is not None and pid in id_to_index:
-                    reserved.add(id_to_index[pid])
-
-            # Build distance matrix for unknowns only
-            unknown_indices = [i for i, (idx, d) in enumerate(items) if 'person_id' not in d]
-            if not unknown_indices:
-                continue
-            # Ensure gallery is an array for fast dot products
-            gallery_mat = np.stack(gallery_embeddings, axis=0).astype(np.float32)
-            D = np.zeros((len(unknown_indices), len(gallery_embeddings)), dtype=np.float32)
-            for ri, item_i in enumerate(unknown_indices):
-                _, d = items[item_i]
-                # embeddings are expected L2-normalized
-                D[ri, :] = 1.0 - np.dot(gallery_mat, d['embedding'])
-            fi, gj = linear_sum_assignment(D)
-            assigned = set()
-            for ri, j in zip(fi, gj):
-                if j in reserved or j in assigned:
-                    continue
-                # Accept match if cosine distance below threshold (i.e., similarity above 1 - threshold)
-                if D[ri, j] < args.recognition_threshold:
-                    item_i = unknown_indices[ri]
-                    idx, _ = items[item_i]
-                    video_data[idx]['person_id'] = gallery_ids[j]
-                    assigned.add(j)
-            # Others remain unknown
-        print(f"Step 3: Saving results...")
-        save_outputs(video_path, video_data, args.output_dir)
-
+    
+    # Create person prototypes from ground truth embeddings
+    prototypes, person_ids = create_person_prototypes(gt_embeddings_by_person)
+    
+    print(f"\n=== PHASE 2: Process All Frames with GT-based Recognition ===")
+    # Phase 2: Process all frames using GT labels where available and recognition elsewhere
+    all_face_data = process_all_frames(
+        args.video_path, app, ground_truth_df, prototypes, person_ids, 
+        recognition_threshold=args.recognition_threshold, max_frames=args.max_frames
+    )
+    
+    print(f"\n=== PHASE 3: Save Results ===")
+    save_outputs(args.video_path, all_face_data, args.output_dir)
+    
     end_time = time.time()
-    print(f"\nFinished processing '{os.path.basename(args.video_path)}' in {end_time - start_time:.2f} seconds.")
+    print(f"\nCompleted processing '{os.path.basename(args.video_path)}' in {end_time - start_time:.2f} seconds.")
+    print(f"Total faces labeled: {len(all_face_data)}")
+    
+    # Final validation
+    unique_person_ids = set()
+    for item in all_face_data:
+        if 'person_id' in item:
+            unique_person_ids.add(int(item['person_id']))
+    
+    expected_person_ids = set(person_ids)
+    print(f"Expected person IDs from GT: {sorted(expected_person_ids)}")
+    print(f"Actual person IDs in results: {sorted(unique_person_ids)}")
+    
+    if unique_person_ids != expected_person_ids:
+        print("WARNING: Mismatch between expected and actual person IDs!")
+    else:
+        print("✓ Person ID validation passed!")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Face recognition for a single video file.")
+    parser = argparse.ArgumentParser(description="Fixed face recognition for a single video file.")
     parser.add_argument('--video_path', type=str, required=True, help="Path to the video file to process.")
     parser.add_argument('--output_dir', type=str, default="processed_videos", help="Directory to save output files.")
-    parser.add_argument('--min_cluster_size', type=int, default=5, help="Minimum cluster size for HDBSCAN.")
-    parser.add_argument('--recognition_threshold', type=float, default=0.8, help="Cosine distance threshold for recognition.")
+    parser.add_argument('--recognition_threshold', type=float, default=0.6, help="Cosine distance threshold for recognition (lower = more lenient).")
     parser.add_argument(
         '--execution_provider',
         type=str,
@@ -463,7 +529,7 @@ if __name__ == "__main__":
     )
     parser.add_argument('--insightface_root', type=str, default=None, help="Optional cache dir for InsightFace models (defaults to $INSIGHTFACE_HOME).")
     parser.add_argument('--insightface_model', type=str, default='antelopev2', choices=['antelopev2','buffalo_l','antelope'], help="InsightFace model pack (default: antelopev2)")
-    parser.add_argument('--ground_truth_dir', type=str, help="Directory containing ground truth CSV files (optional).")
+    parser.add_argument('--ground_truth_dir', type=str, required=True, help="Directory containing ground truth CSV files (REQUIRED).")
     parser.add_argument('--max_frames', type=int, default=36000, help="Maximum frames to process (default: 36000 = 20 minutes at 30fps).")
     
     args = parser.parse_args()
@@ -471,11 +537,3 @@ if __name__ == "__main__":
     os.makedirs(args.output_dir, exist_ok=True)
     
     main(args)
-
-
-
-# Body pose extraction
-# How to detect body + person recognition
-
-# segmentation algorithm to find people's body and see where it moves
-# co-tracking to see where it moved
