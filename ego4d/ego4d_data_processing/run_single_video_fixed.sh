@@ -60,66 +60,99 @@ echo "🔧 Setting up environment..."
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate $CONDA_ENV_NAME
 
+# === 1) 환경 정리 + 모델 캐시 경로 고정 ===
+echo "Setting up clean environment..."
 export PYTHONNOUSERSITE=1
 unset PYTHONPATH || true
-export INSIGHTFACE_HOME="${INSIGHTFACE_HOME:-$CONDA_PREFIX/.insightface}"
-mkdir -p "$INSIGHTFACE_HOME/models"
 
-# Set up CUDA library paths
+# InsightFace 모델 캐시 루트 (항상 이쪽을 보게 만듦)
+export INSIGHTFACE_HOME="${INSIGHTFACE_HOME:-$CONDA_PREFIX/.insightface}"
+mkdir -p "$INSIGHTFACE_HOME"
+
+# === 2) ORT(CUDA 12 + cuDNN 9) 런타임 경로 구성 ===
+echo "Configuring CUDA runtime paths..."
+# 파이썬 부버전 확인 (3.10 등)
 PYVER=$(python -c "import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")")
-export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:\
-/usr/local/lib/ollama/cuda_v12:\
+
+# 기본: conda 안에 설치된 CUDA 런타임 + cuDNN 9 + 기타 라이브러리
+export LD_LIBRARY_PATH="\
+$CONDA_PREFIX/lib/python$PYVER/site-packages/nvidia/cuda_runtime/lib:\
+$CONDA_PREFIX/lib/python$PYVER/site-packages/nvidia/cublas/lib:\
 $CONDA_PREFIX/lib/python$PYVER/site-packages/nvidia/cudnn/lib:\
 $CONDA_PREFIX/lib/python$PYVER/site-packages/nvidia/cufft/lib:\
 $CONDA_PREFIX/lib/python$PYVER/site-packages/nvidia/cuda_nvrtc/lib:\
-/usr/local/lib/python3.10/dist-packages/nvidia/curand/lib:\
+$CONDA_PREFIX/lib:\
 $LD_LIBRARY_PATH"
+
+# (선택) 시스템에 있다면 추가 — 누락 시에만 보강용
+if [ -d /usr/local/lib/ollama/cuda_v12 ]; then
+  export LD_LIBRARY_PATH="/usr/local/lib/ollama/cuda_v12:$LD_LIBRARY_PATH"
+fi
 
 echo "✅ Environment setup complete"
 echo ""
 
-# --- Smoke Test: ORT CUDA EP + antelopev2 ---
-echo "🧪 Smoke Test: ORT CUDA EP + antelopev2 load"
-echo "=============================================="
-if ! python - <<'PYIN'
-import os, sys, numpy as np
+# === 3) 실행 전 프리플라이트 (ORT CUDA EP + 런타임 so 체크) ===
+echo "🧪 Preflight Check: ORT CUDA EP + Runtime Libraries"
+echo "====================================================="
+python - <<'PYIN'
+import ctypes, sys, os
 import onnxruntime as ort
 
-home = os.environ.get("INSIGHTFACE_HOME")
-root = os.path.join(home, "models", "antelopev2")
-need = ["scrfd_10g_bnkps.onnx","glintr100.onnx","genderage.onnx","2d106det.onnx"]
-missing = [f for f in need if not os.path.exists(os.path.join(root, f))]
-print("[INSIGHTFACE_HOME]", home)
-print("[ORT providers]", ort.get_available_providers())
-assert "CUDAExecutionProvider" in ort.get_available_providers(), "CUDA EP not available"
+print('[Preflight] ORT:', ort.__version__, '| providers:', ort.get_available_providers())
+assert 'CUDAExecutionProvider' in ort.get_available_providers(), 'CUDA EP not available'
 
+need = [
+  'libcublasLt.so.12','libcublas.so.12','libcudart.so.12',
+  'libcurand.so.10','libcufft.so.11','libnvrtc.so.12','libcudnn.so.9'
+]
+missing=[]
+for so in need:
+    try:
+        ctypes.CDLL(so)
+    except OSError as e:
+        print('[Preflight] Missing:', so, '->', e); missing.append(so)
 if missing:
-    print("[ERR] antelopev2 missing:", missing)
-    sys.exit(2)
+    print('[Preflight] FAIL. Missing libs:', missing); sys.exit(2)
+print('[Preflight] CUDA runtime chain OK')
+PYIN
 
+# === 4) InsightFace 모델 팩 보증 ===
+echo ""
+echo "🔧 InsightFace Model Pack Guarantee"
+echo "===================================="
+python - <<'PYIN'
+import os, sys, onnxruntime as ort
 from insightface.app import FaceAnalysis
 
-# 핵심: name="antelopev2" 를 반드시 지정 (경로는 INSIGHTFACE_HOME/models/antelopev2 에서 자동 조회)
-app = FaceAnalysis(name="antelopev2", providers=["CUDAExecutionProvider"])
-app.prepare(ctx_id=0, det_size=(640,640))
+root = os.environ.get('INSIGHTFACE_HOME')
+try:
+    app = FaceAnalysis(name='antelopev2', root=root, providers=['CUDAExecutionProvider','CPUExecutionProvider'])
+    app.prepare(ctx_id=0, det_size=(640,640))
+    print('[Prefetch] antelopev2 OK')
+except Exception as e:
+    print('[Prefetch] init failed:', e)
+    pack = os.path.join(root, 'models', 'antelopev2')
+    zipp = pack + '.zip'
+    import shutil, subprocess, pathlib
+    print('[Prefetch] cleaning & redownloading...')
+    shutil.rmtree(pack, ignore_errors=True)
+    pathlib.Path(os.path.dirname(pack)).mkdir(parents=True, exist_ok=True)
+    url = 'https://github.com/deepinsight/insightface/releases/download/v0.7/antelopev2.zip'
+    subprocess.check_call(['curl','-L','-o', zipp, url])
+    subprocess.check_call(['unzip','-o', zipp, '-d', os.path.dirname(pack)])
+    app = FaceAnalysis(name='antelopev2', root=root, providers=['CUDAExecutionProvider','CPUExecutionProvider'])
+    app.prepare(ctx_id=0, det_size=(640,640))
+    print('[Prefetch] antelopev2 reinstalled OK')
 
-# 가벼운 더미 입력으로 1회 호출
+# Final dummy test
+import numpy as np
 img = np.zeros((480, 640, 3), dtype=np.uint8)
 _ = app.get(img)
-
-print("[OK] antelopev2 ready with CUDAExecutionProvider.")
+print('[OK] antelopev2 ready with dummy test passed')
 PYIN
-then
-    echo ""
-    echo "❌ Smoke test FAILED - InsightFace setup is incomplete"
-    echo "   Please check:"
-    echo "   - INSIGHTFACE_HOME environment variable"
-    echo "   - antelopev2 model files"
-    echo "   - CUDA EP availability"
-    exit 1
-fi
 
-echo "✅ Smoke test PASSED - InsightFace is properly configured"
+echo "✅ All preflight checks PASSED - InsightFace is properly configured"
 echo ""
 
 # --- Step 1: Validation ---

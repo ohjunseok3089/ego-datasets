@@ -99,6 +99,9 @@ def create_face_analysis(preferred_provider: str, model_root: Optional[str] = No
             kwargs["providers"] = [provider_to_use]
         if model_root:
             kwargs["root"] = model_root
+        else:
+            # 항상 INSIGHTFACE_HOME 명시 (환경 변수 기반)
+            kwargs["root"] = os.environ.get("INSIGHTFACE_HOME", os.path.join(os.environ.get("CONDA_PREFIX", ""), ".insightface"))
         return FaceAnalysis(name=pack, **kwargs)
 
     try:

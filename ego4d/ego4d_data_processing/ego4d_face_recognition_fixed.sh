@@ -129,66 +129,92 @@ for ((gpu=0; gpu<NUM_GPUS; gpu++)); do
         echo "echo '[GPU $gpu] Activating Conda environment: $CONDA_ENV_NAME'"
         echo 'source "$(conda info --base)/etc/profile.d/conda.sh"'
         echo "conda activate $CONDA_ENV_NAME"
+        
+        # === 1) 환경 정리 + 모델 캐시 경로 고정 ===
+        echo "echo '[GPU $gpu] Setting up clean environment...'"
         echo "export PYTHONNOUSERSITE=1"
         echo "unset PYTHONPATH || true"
-
+        echo ""
+        echo "# InsightFace 모델 캐시 루트 (항상 이쪽을 보게 만듦)"
         echo 'export INSIGHTFACE_HOME="${INSIGHTFACE_HOME:-$CONDA_PREFIX/.insightface}"'
-        echo 'mkdir -p "$INSIGHTFACE_HOME/models"'
-
+        echo 'mkdir -p "$INSIGHTFACE_HOME"'
+        echo ""
+        
+        # === 2) ORT(CUDA 12 + cuDNN 9) 런타임 경로 구성 ===
+        echo "echo '[GPU $gpu] Configuring CUDA runtime paths...'"
+        echo "# 파이썬 부버전 확인 (3.10 등)"
         echo 'PYVER=$(python -c "import sys; print(f\"{sys.version_info.major}.{sys.version_info.minor}\")")'
-        echo 'export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:'\
-'/usr/local/lib/ollama/cuda_v12:'\
-'$CONDA_PREFIX/lib/python$PYVER/site-packages/nvidia/cudnn/lib:'\
-'$CONDA_PREFIX/lib/python$PYVER/site-packages/nvidia/cufft/lib:'\
-'$CONDA_PREFIX/lib/python$PYVER/site-packages/nvidia/cuda_nvrtc/lib:'\
-'/usr/local/lib/python3.10/dist-packages/nvidia/curand/lib:'\
-'$LD_LIBRARY_PATH"'
+        echo ""
+        echo "# 기본: conda 안에 설치된 CUDA 런타임 + cuDNN 9 + 기타 라이브러리"
+        echo 'export LD_LIBRARY_PATH="\
+$CONDA_PREFIX/lib/python$PYVER/site-packages/nvidia/cuda_runtime/lib:\
+$CONDA_PREFIX/lib/python$PYVER/site-packages/nvidia/cublas/lib:\
+$CONDA_PREFIX/lib/python$PYVER/site-packages/nvidia/cudnn/lib:\
+$CONDA_PREFIX/lib/python$PYVER/site-packages/nvidia/cufft/lib:\
+$CONDA_PREFIX/lib/python$PYVER/site-packages/nvidia/cuda_nvrtc/lib:\
+$CONDA_PREFIX/lib:\
+$LD_LIBRARY_PATH"'
+        echo ""
+        echo "# (선택) 시스템에 있다면 추가 — 누락 시에만 보강용"
+        echo 'if [ -d /usr/local/lib/ollama/cuda_v12 ]; then'
+        echo '  export LD_LIBRARY_PATH="/usr/local/lib/ollama/cuda_v12:$LD_LIBRARY_PATH"'
+        echo 'fi'
 
+        # === 3) 실행 전 프리플라이트 (ORT CUDA EP + 런타임 so 체크) ===
         cat <<'PY'
+echo "[GPU $gpu] === 3) Preflight Check: ORT CUDA EP + Runtime Libraries ==="
 python - <<'PYIN'
-import sys, importlib
-def ver(mod):
-    try:
-        m = importlib.import_module(mod)
-        return getattr(m, '__version__', 'unknown')
-    except Exception as e:
-        return f'ImportError: {e}'
-print('[GPU $gpu] Python', sys.version.split()[0],
-      '| numpy', ver('numpy'),
-      '| pandas', ver('pandas'),
-      '| insightface', ver('insightface'),
-      '| onnxruntime', ver('onnxruntime'))
-try:
-    import onnxruntime as ort
-    providers = ort.get_available_providers()
-    print('[GPU $gpu] ONNX Runtime providers available:', providers)
-    if 'CUDAExecutionProvider' not in providers:
-        print('[GPU $gpu] [Error] CUDAExecutionProvider not available.')
-        sys.exit(1)
-except Exception as e:
-    print('[GPU $gpu] onnxruntime import failed for provider check:', e)
-    sys.exit(1)
-PYIN
-PY
+import ctypes, sys, os
+import onnxruntime as ort
 
-        cat <<'PY'
-python - <<'PYIN'
-import ctypes, onnxruntime as ort, sys
-print('[GPU $gpu] [Preflight] ORT:', ort.__version__, 'providers:', ort.get_available_providers())
+print(f'[GPU $gpu] [Preflight] ORT:', ort.__version__, '| providers:', ort.get_available_providers())
+assert 'CUDAExecutionProvider' in ort.get_available_providers(), 'CUDA EP not available'
+
 need = [
-    'libcublasLt.so.12','libcublas.so.12','libcudart.so.12',
-    'libcurand.so.10','libcufft.so.11','libnvrtc.so.12','libcudnn.so.9'
+  'libcublasLt.so.12','libcublas.so.12','libcudart.so.12',
+  'libcurand.so.10','libcufft.so.11','libnvrtc.so.12','libcudnn.so.9'
 ]
-try:
-    for so in need: ctypes.CDLL(so)
-    print('[GPU $gpu] [Preflight] CUDA runtime deps OK')
-except OSError as e:
-    print('[GPU $gpu] [Preflight] Missing CUDA runtime dep:', e); sys.exit(1)
+missing=[]
+for so in need:
+    try:
+        ctypes.CDLL(so)
+    except OSError as e:
+        print(f'[GPU $gpu] [Preflight] Missing:', so, '->', e); missing.append(so)
+if missing:
+    print(f'[GPU $gpu] [Preflight] FAIL. Missing libs:', missing); sys.exit(2)
+print(f'[GPU $gpu] [Preflight] CUDA runtime chain OK')
 PYIN
 PY
 
+        # === 4) InsightFace 모델 팩 보증(필요 시 재다운로드) ===
         cat <<'PY'
-echo "[GPU $gpu] === Smoke test: ORT CUDA EP + antelopev2 load ==="
+echo "[GPU $gpu] === 4) InsightFace Model Pack Guarantee ==="
+python - <<'PYIN'
+import os, sys, onnxruntime as ort
+from insightface.app import FaceAnalysis
+
+root = os.environ.get('INSIGHTFACE_HOME')
+try:
+    app = FaceAnalysis(name='antelopev2', root=root, providers=['CUDAExecutionProvider','CPUExecutionProvider'])
+    app.prepare(ctx_id=0, det_size=(640,640))
+    print(f'[GPU $gpu] [Prefetch] antelopev2 OK')
+except Exception as e:
+    print(f'[GPU $gpu] [Prefetch] init failed:', e)
+    pack = os.path.join(root, 'models', 'antelopev2')
+    zipp = pack + '.zip'
+    import shutil, subprocess, pathlib
+    print(f'[GPU $gpu] [Prefetch] cleaning & redownloading...')
+    shutil.rmtree(pack, ignore_errors=True)
+    pathlib.Path(os.path.dirname(pack)).mkdir(parents=True, exist_ok=True)
+    url = 'https://github.com/deepinsight/insightface/releases/download/v0.7/antelopev2.zip'
+    subprocess.check_call(['curl','-L','-o', zipp, url])
+    subprocess.check_call(['unzip','-o', zipp, '-d', os.path.dirname(pack)])
+    app = FaceAnalysis(name='antelopev2', root=root, providers=['CUDAExecutionProvider','CPUExecutionProvider'])
+    app.prepare(ctx_id=0, det_size=(640,640))
+    print(f'[GPU $gpu] [Prefetch] antelopev2 reinstalled OK')
+PYIN
+
+echo "[GPU $gpu] === 5) Final Smoke Test ==="
 python - <<'PYIN'
 import os, sys, numpy as np
 import onnxruntime as ort
@@ -208,7 +234,7 @@ if missing:
 from insightface.app import FaceAnalysis
 
 # 핵심: name="antelopev2" 를 반드시 지정 (경로는 INSIGHTFACE_HOME/models/antelopev2 에서 자동 조회)
-app = FaceAnalysis(name="antelopev2", providers=["CUDAExecutionProvider"])
+app = FaceAnalysis(name="antelopev2", root=root, providers=["CUDAExecutionProvider"])
 app.prepare(ctx_id=0, det_size=(640,640))
 
 # 가벼운 더미 입력으로 1회 호출
