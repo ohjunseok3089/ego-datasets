@@ -186,32 +186,25 @@ print(f'[GPU $gpu] [Preflight] CUDA runtime chain OK')
 PYIN
 PY
 
-        # === 4) InsightFace 모델 팩 보증(필요 시 재다운로드) ===
+        # === 4) InsightFace 모델 팩 체크 (기존 모델 보존) ===
         cat <<'PY'
-echo "[GPU $gpu] === 4) InsightFace Model Pack Guarantee ==="
+echo "[GPU $gpu] === 4) InsightFace Model Pack Check ==="
 python - <<'PYIN'
 import os, sys, onnxruntime as ort
 from insightface.app import FaceAnalysis
 
 root = os.environ.get('INSIGHTFACE_HOME')
+print(f'[GPU $gpu] [Check] Testing existing antelopev2 models at {root}...')
+
 try:
     app = FaceAnalysis(name='antelopev2', root=root, providers=['CUDAExecutionProvider','CPUExecutionProvider'])
     app.prepare(ctx_id=0, det_size=(640,640))
-    print(f'[GPU $gpu] [Prefetch] antelopev2 OK')
+    print(f'[GPU $gpu] [Check] ✅ Existing antelopev2 models work perfectly!')
 except Exception as e:
-    print(f'[GPU $gpu] [Prefetch] init failed:', e)
-    pack = os.path.join(root, 'models', 'antelopev2')
-    zipp = pack + '.zip'
-    import shutil, subprocess, pathlib
-    print(f'[GPU $gpu] [Prefetch] cleaning & redownloading...')
-    shutil.rmtree(pack, ignore_errors=True)
-    pathlib.Path(os.path.dirname(pack)).mkdir(parents=True, exist_ok=True)
-    url = 'https://github.com/deepinsight/insightface/releases/download/v0.7/antelopev2.zip'
-    subprocess.check_call(['curl','-L','-o', zipp, url])
-    subprocess.check_call(['unzip','-o', zipp, '-d', os.path.dirname(pack)])
-    app = FaceAnalysis(name='antelopev2', root=root, providers=['CUDAExecutionProvider','CPUExecutionProvider'])
-    app.prepare(ctx_id=0, det_size=(640,640))
-    print(f'[GPU $gpu] [Prefetch] antelopev2 reinstalled OK')
+    print(f'[GPU $gpu] [Check] ❌ Existing models failed:', e)
+    print(f'[GPU $gpu] [Check] This might indicate missing or corrupted models.')
+    print(f'[GPU $gpu] [Check] Manual intervention required - check INSIGHTFACE_HOME.')
+    sys.exit(1)
 PYIN
 
 echo "[GPU $gpu] === 5) Final Smoke Test ==="
