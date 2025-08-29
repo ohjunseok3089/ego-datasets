@@ -11,6 +11,54 @@ import argparse
 from pathlib import Path
 
 
+def run_insightface_smoke_test() -> bool:
+    """Run comprehensive InsightFace smoke test"""
+    print("🧪 Step 0: InsightFace Smoke Test...")
+    print("="*60)
+    
+    cmd = [
+        sys.executable, "-c", """
+import os, sys, numpy as np
+import onnxruntime as ort
+
+home = os.environ.get("INSIGHTFACE_HOME")
+root = os.path.join(home, "models", "antelopev2")
+need = ["scrfd_10g_bnkps.onnx","glintr100.onnx","genderage.onnx","2d106det.onnx"]
+missing = [f for f in need if not os.path.exists(os.path.join(root, f))]
+print("[INSIGHTFACE_HOME]", home)
+print("[ORT providers]", ort.get_available_providers())
+assert "CUDAExecutionProvider" in ort.get_available_providers(), "CUDA EP not available"
+
+if missing:
+    print("[ERR] antelopev2 missing:", missing)
+    sys.exit(2)
+
+from insightface.app import FaceAnalysis
+
+# 핵심: name="antelopev2" 를 반드시 지정 (경로는 INSIGHTFACE_HOME/models/antelopev2 에서 자동 조회)
+app = FaceAnalysis(name="antelopev2", providers=["CUDAExecutionProvider"])
+app.prepare(ctx_id=0, det_size=(640,640))
+
+# 가벼운 더미 입력으로 1회 호출
+img = np.zeros((480, 640, 3), dtype=np.uint8)
+_ = app.get(img)
+
+print("[OK] antelopev2 ready with CUDAExecutionProvider.")
+"""
+    ]
+    
+    try:
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        print(result.stdout)
+        print("✅ InsightFace smoke test PASSED")
+        return True
+    except subprocess.CalledProcessError as e:
+        print("❌ InsightFace smoke test FAILED!")
+        print("STDOUT:", e.stdout)
+        print("STDERR:", e.stderr)
+        return False
+
+
 def run_validation(video_path: str, ground_truth_dir: str, skip_face_test: bool = False) -> bool:
     """Run ground truth validation"""
     print("🧪 Step 1: Validating Ground Truth Injection...")
@@ -146,6 +194,11 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     
     success = True
+    
+    # Step 0: InsightFace smoke test
+    if not run_insightface_smoke_test():
+        print("❌ InsightFace smoke test failed - aborting test")
+        sys.exit(1)
     
     # Step 1: Validate ground truth injection
     if not args.skip_validation:

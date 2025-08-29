@@ -78,6 +78,50 @@ $LD_LIBRARY_PATH"
 echo "✅ Environment setup complete"
 echo ""
 
+# --- Smoke Test: ORT CUDA EP + antelopev2 ---
+echo "🧪 Smoke Test: ORT CUDA EP + antelopev2 load"
+echo "=============================================="
+if ! python - <<'PYIN'
+import os, sys, numpy as np
+import onnxruntime as ort
+
+home = os.environ.get("INSIGHTFACE_HOME")
+root = os.path.join(home, "models", "antelopev2")
+need = ["scrfd_10g_bnkps.onnx","glintr100.onnx","genderage.onnx","2d106det.onnx"]
+missing = [f for f in need if not os.path.exists(os.path.join(root, f))]
+print("[INSIGHTFACE_HOME]", home)
+print("[ORT providers]", ort.get_available_providers())
+assert "CUDAExecutionProvider" in ort.get_available_providers(), "CUDA EP not available"
+
+if missing:
+    print("[ERR] antelopev2 missing:", missing)
+    sys.exit(2)
+
+from insightface.app import FaceAnalysis
+
+# 핵심: name="antelopev2" 를 반드시 지정 (경로는 INSIGHTFACE_HOME/models/antelopev2 에서 자동 조회)
+app = FaceAnalysis(name="antelopev2", providers=["CUDAExecutionProvider"])
+app.prepare(ctx_id=0, det_size=(640,640))
+
+# 가벼운 더미 입력으로 1회 호출
+img = np.zeros((480, 640, 3), dtype=np.uint8)
+_ = app.get(img)
+
+print("[OK] antelopev2 ready with CUDAExecutionProvider.")
+PYIN
+then
+    echo ""
+    echo "❌ Smoke test FAILED - InsightFace setup is incomplete"
+    echo "   Please check:"
+    echo "   - INSIGHTFACE_HOME environment variable"
+    echo "   - antelopev2 model files"
+    echo "   - CUDA EP availability"
+    exit 1
+fi
+
+echo "✅ Smoke test PASSED - InsightFace is properly configured"
+echo ""
+
 # --- Step 1: Validation ---
 echo "🧪 Step 1: Validating Ground Truth"
 echo "===================================="

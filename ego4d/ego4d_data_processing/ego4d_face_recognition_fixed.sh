@@ -188,6 +188,37 @@ PYIN
 PY
 
         cat <<'PY'
+echo "[GPU $gpu] === Smoke test: ORT CUDA EP + antelopev2 load ==="
+python - <<'PYIN'
+import os, sys, numpy as np
+import onnxruntime as ort
+
+home = os.environ.get("INSIGHTFACE_HOME")
+root = os.path.join(home, "models", "antelopev2")
+need = ["scrfd_10g_bnkps.onnx","glintr100.onnx","genderage.onnx","2d106det.onnx"]
+missing = [f for f in need if not os.path.exists(os.path.join(root, f))]
+print(f"[GPU $gpu] [INSIGHTFACE_HOME]", home)
+print(f"[GPU $gpu] [ORT providers]", ort.get_available_providers())
+assert "CUDAExecutionProvider" in ort.get_available_providers(), "CUDA EP not available"
+
+if missing:
+    print(f"[GPU $gpu] [ERR] antelopev2 missing:", missing)
+    sys.exit(2)
+
+from insightface.app import FaceAnalysis
+
+# 핵심: name="antelopev2" 를 반드시 지정 (경로는 INSIGHTFACE_HOME/models/antelopev2 에서 자동 조회)
+app = FaceAnalysis(name="antelopev2", providers=["CUDAExecutionProvider"])
+app.prepare(ctx_id=0, det_size=(640,640))
+
+# 가벼운 더미 입력으로 1회 호출
+img = np.zeros((480, 640, 3), dtype=np.uint8)
+_ = app.get(img)
+
+print(f"[GPU $gpu] [OK] antelopev2 ready with CUDAExecutionProvider.")
+PYIN
+
+echo "[GPU $gpu] === Additional compatibility test ==="
 python - <<'PYIN'
 import os
 from face_recognition_fixed import create_face_analysis
@@ -195,9 +226,9 @@ home = os.environ.get('INSIGHTFACE_HOME')
 try:
     app = create_face_analysis('auto', model_root=home, model_name='antelopev2')
     app.prepare(ctx_id=0, det_size=(640, 640))
-    print('[GPU $gpu] [Prefetch] InsightFace models prepared successfully.')
+    print(f'[GPU $gpu] [Prefetch] InsightFace models prepared successfully via face_recognition_fixed.')
 except Exception as e:
-    print('[GPU $gpu] [Prefetch] Error: model prefetch failed:', e); raise
+    print(f'[GPU $gpu] [Prefetch] Error: model prefetch failed:', e); raise
 PYIN
 PY
 

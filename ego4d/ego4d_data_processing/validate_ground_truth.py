@@ -128,6 +128,60 @@ def validate_video_access(video_path: str, ground_truth_df: pd.DataFrame) -> boo
         return False
 
 
+def test_insightface_smoke_test() -> bool:
+    """Comprehensive InsightFace smoke test"""
+    print(f"\n🧪 InsightFace Smoke Test (ORT CUDA EP + antelopev2)")
+    print("=" * 55)
+    
+    try:
+        import os, sys, numpy as np
+        import onnxruntime as ort
+        import insightface
+        from insightface.app import FaceAnalysis
+        
+        home = os.environ.get("INSIGHTFACE_HOME")
+        if not home:
+            print("❌ INSIGHTFACE_HOME not set")
+            return False
+            
+        root = os.path.join(home, "models", "antelopev2")
+        need = ["scrfd_10g_bnkps.onnx","glintr100.onnx","genderage.onnx","2d106det.onnx"]
+        missing = [f for f in need if not os.path.exists(os.path.join(root, f))]
+        
+        print(f"   INSIGHTFACE_HOME: {home}")
+        print(f"   ORT providers: {ort.get_available_providers()}")
+        
+        if "CUDAExecutionProvider" not in ort.get_available_providers():
+            print("⚠️  CUDA EP not available - will try CPU mode")
+            providers = ["CPUExecutionProvider"]
+            ctx_id = -1
+        else:
+            providers = ["CUDAExecutionProvider"]
+            ctx_id = 0
+        
+        if missing:
+            print(f"❌ antelopev2 missing files: {missing}")
+            return False
+        
+        print("✅ All required model files found")
+        
+        # Test direct FaceAnalysis initialization
+        app = FaceAnalysis(name="antelopev2", providers=providers)
+        app.prepare(ctx_id=ctx_id, det_size=(640,640))
+        
+        # Test with dummy input
+        img = np.zeros((480, 640, 3), dtype=np.uint8)
+        faces = app.get(img)
+        
+        print(f"✅ antelopev2 ready with {providers[0]}")
+        print(f"   Dummy test returned {len(faces)} faces (expected: 0)")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Smoke test failed: {e}")
+        return False
+
+
 def test_face_detection_sample(video_path: str, ground_truth_df: pd.DataFrame) -> bool:
     """Test face detection on a sample of ground truth frames"""
     print(f"\n🔍 Testing face detection on sample GT frames...")
@@ -141,10 +195,25 @@ def test_face_detection_sample(video_path: str, ground_truth_df: pd.DataFrame) -
         print(f"❌ Cannot import InsightFace: {e}")
         return False
     
+    # Run comprehensive smoke test first
+    if not test_insightface_smoke_test():
+        print("❌ InsightFace smoke test failed - skipping face detection test")
+        return False
+    
     try:
-        # Try to initialize face analysis (CPU mode for testing)
-        app = FaceAnalysis(name='antelopev2', providers=['CPUExecutionProvider'])
-        app.prepare(ctx_id=-1, det_size=(640, 640))  # CPU mode
+        # Try to initialize face analysis (prefer CUDA, fallback to CPU)
+        import onnxruntime as ort
+        if "CUDAExecutionProvider" in ort.get_available_providers():
+            providers = ["CUDAExecutionProvider"]
+            ctx_id = 0
+            print("🔧 Using CUDA mode for face detection test")
+        else:
+            providers = ["CPUExecutionProvider"]
+            ctx_id = -1
+            print("🔧 Using CPU mode for face detection test")
+            
+        app = FaceAnalysis(name='antelopev2', providers=providers)
+        app.prepare(ctx_id=ctx_id, det_size=(640, 640))
         print("✅ InsightFace model initialized successfully")
     except Exception as e:
         print(f"❌ Failed to initialize InsightFace: {e}")
