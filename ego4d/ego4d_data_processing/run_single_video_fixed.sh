@@ -62,12 +62,18 @@ conda activate $CONDA_ENV_NAME
 
 # === 1) 환경 정리 + 모델 캐시 경로 고정 ===
 echo "Setting up clean environment..."
+# --- InsightFace cache root (DO NOT point to /models/antelopev2) ---
 export PYTHONNOUSERSITE=1
 unset PYTHONPATH || true
-
-# InsightFace 모델 캐시 루트 (항상 이쪽을 보게 만듦)
+unset INSIGHTFACE_ROOT 2>/dev/null || true     # 예전 변수 썼다면 무시
 export INSIGHTFACE_HOME="${INSIGHTFACE_HOME:-$CONDA_PREFIX/.insightface}"
-mkdir -p "$INSIGHTFACE_HOME"
+mkdir -p "$INSIGHTFACE_HOME/models"
+
+# 잘못된 이중 경로(…/models/antelopev2/models/antelopev2) 정리
+if [ -d "$INSIGHTFACE_HOME/models/antelopev2/models/antelopev2" ]; then
+  echo "[Fix] Removing nested antelopev2 pack under $INSIGHTFACE_HOME/models/antelopev2/models"
+  rm -rf "$INSIGHTFACE_HOME/models/antelopev2"
+fi
 
 # === 2) ORT(CUDA 12 + cuDNN 9) 런타임 경로 구성 ===
 echo "Configuring CUDA runtime paths..."
@@ -117,21 +123,33 @@ if missing:
 print('[Preflight] CUDA runtime chain OK')
 PYIN
 
-# === 4) InsightFace 모델 팩 체크 (기존 모델 보존) ===
+# === 4) InsightFace 모델 팩 자가복구 ===
 echo ""
-echo "🔧 InsightFace Model Pack Check"
-echo "==============================="
+echo "🔧 InsightFace Model Pack Self-Healing"
+echo "======================================="
 python - <<'PYIN'
-import os, sys, onnxruntime as ort
+import os, shutil, subprocess, sys
 from insightface.app import FaceAnalysis
 
-root = os.environ.get('INSIGHTFACE_HOME')
-print(f'[Check] Testing existing antelopev2 models at {root}...')
+root = os.environ.get("INSIGHTFACE_HOME")
+pack = os.path.join(root, "models", "antelopev2")
+zipp = pack + ".zip"
 
+def ensure_pack():
+    if not (os.path.isdir(pack) and len(os.listdir(pack)) >= 4):
+        # 깨끗이 받고 풀기
+        print('[Fix] Re-installing antelopev2 pack...')
+        shutil.rmtree(pack, ignore_errors=True)
+        os.makedirs(os.path.dirname(pack), exist_ok=True)
+        url = "https://github.com/deepinsight/insightface/releases/download/v0.7/antelopev2.zip"
+        subprocess.check_call(["curl", "-L", "-o", zipp, url])
+        subprocess.check_call(["unzip", "-o", zipp, "-d", os.path.dirname(pack)])
+
+# 먼저 시도
 try:
-    app = FaceAnalysis(name='antelopev2', root=root, providers=['CUDAExecutionProvider','CPUExecutionProvider'])
+    app = FaceAnalysis(name="antelopev2", root=root, providers=["CUDAExecutionProvider","CPUExecutionProvider"])
     app.prepare(ctx_id=0, det_size=(640,640))
-    print('[Check] ✅ Existing antelopev2 models work perfectly!')
+    print('[Prefetch] ✅ antelopev2 OK')
     
     # Final dummy test
     import numpy as np
@@ -140,11 +158,18 @@ try:
     print('[OK] antelopev2 ready with dummy test passed')
     
 except Exception as e:
-    print('[Check] ❌ Existing models failed:', e)
-    print('[Check] This might indicate missing or corrupted models.')
-    print('[Check] Manual intervention required - check INSIGHTFACE_HOME.')
-    print('[Check] You may need to manually reinstall InsightFace models.')
-    sys.exit(1)
+    print('[Prefetch] init failed, re-installing:', e)
+    ensure_pack()
+    # 재시도
+    app = FaceAnalysis(name="antelopev2", root=root, providers=["CUDAExecutionProvider","CPUExecutionProvider"])
+    app.prepare(ctx_id=0, det_size=(640,640))
+    print('[Prefetch] ✅ antelopev2 reinstalled OK')
+    
+    # Final dummy test
+    import numpy as np
+    img = np.zeros((480, 640, 3), dtype=np.uint8)
+    _ = app.get(img)
+    print('[OK] antelopev2 ready with dummy test passed')
 PYIN
 
 echo "✅ All preflight checks PASSED - InsightFace is properly configured"

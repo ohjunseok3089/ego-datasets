@@ -132,12 +132,18 @@ for ((gpu=0; gpu<NUM_GPUS; gpu++)); do
         
         # === 1) 환경 정리 + 모델 캐시 경로 고정 ===
         echo "echo '[GPU $gpu] Setting up clean environment...'"
+        echo "# --- InsightFace cache root (DO NOT point to /models/antelopev2) ---"
         echo "export PYTHONNOUSERSITE=1"
         echo "unset PYTHONPATH || true"
-        echo ""
-        echo "# InsightFace 모델 캐시 루트 (항상 이쪽을 보게 만듦)"
+        echo 'unset INSIGHTFACE_ROOT 2>/dev/null || true     # 예전 변수 썼다면 무시'
         echo 'export INSIGHTFACE_HOME="${INSIGHTFACE_HOME:-$CONDA_PREFIX/.insightface}"'
-        echo 'mkdir -p "$INSIGHTFACE_HOME"'
+        echo 'mkdir -p "$INSIGHTFACE_HOME/models"'
+        echo ""
+        echo "# 잘못된 이중 경로(…/models/antelopev2/models/antelopev2) 정리"
+        echo 'if [ -d "$INSIGHTFACE_HOME/models/antelopev2/models/antelopev2" ]; then'
+        echo '  echo "[GPU $gpu] [Fix] Removing nested antelopev2 pack under $INSIGHTFACE_HOME/models/antelopev2/models"'
+        echo '  rm -rf "$INSIGHTFACE_HOME/models/antelopev2"'
+        echo 'fi'
         echo ""
         
         # === 2) ORT(CUDA 12 + cuDNN 9) 런타임 경로 구성 ===
@@ -186,25 +192,39 @@ print(f'[GPU $gpu] [Preflight] CUDA runtime chain OK')
 PYIN
 PY
 
-        # === 4) InsightFace 모델 팩 체크 (기존 모델 보존) ===
+        # === 4) InsightFace 모델 팩 자가복구 ===
         cat <<'PY'
-echo "[GPU $gpu] === 4) InsightFace Model Pack Check ==="
+echo "[GPU $gpu] === 4) InsightFace Model Pack Self-Healing ==="
 python - <<'PYIN'
-import os, sys, onnxruntime as ort
+import os, shutil, subprocess, sys
 from insightface.app import FaceAnalysis
 
-root = os.environ.get('INSIGHTFACE_HOME')
-print(f'[GPU $gpu] [Check] Testing existing antelopev2 models at {root}...')
+root = os.environ.get("INSIGHTFACE_HOME")
+pack = os.path.join(root, "models", "antelopev2")
+zipp = pack + ".zip"
 
+def ensure_pack():
+    if not (os.path.isdir(pack) and len(os.listdir(pack)) >= 4):
+        # 깨끗이 받고 풀기
+        print(f'[GPU $gpu] [Fix] Re-installing antelopev2 pack...')
+        shutil.rmtree(pack, ignore_errors=True)
+        os.makedirs(os.path.dirname(pack), exist_ok=True)
+        url = "https://github.com/deepinsight/insightface/releases/download/v0.7/antelopev2.zip"
+        subprocess.check_call(["curl", "-L", "-o", zipp, url])
+        subprocess.check_call(["unzip", "-o", zipp, "-d", os.path.dirname(pack)])
+
+# 먼저 시도
 try:
-    app = FaceAnalysis(name='antelopev2', root=root, providers=['CUDAExecutionProvider','CPUExecutionProvider'])
+    app = FaceAnalysis(name="antelopev2", root=root, providers=["CUDAExecutionProvider","CPUExecutionProvider"])
     app.prepare(ctx_id=0, det_size=(640,640))
-    print(f'[GPU $gpu] [Check] ✅ Existing antelopev2 models work perfectly!')
+    print(f'[GPU $gpu] [Prefetch] ✅ antelopev2 OK')
 except Exception as e:
-    print(f'[GPU $gpu] [Check] ❌ Existing models failed:', e)
-    print(f'[GPU $gpu] [Check] This might indicate missing or corrupted models.')
-    print(f'[GPU $gpu] [Check] Manual intervention required - check INSIGHTFACE_HOME.')
-    sys.exit(1)
+    print(f'[GPU $gpu] [Prefetch] init failed, re-installing:', e)
+    ensure_pack()
+    # 재시도
+    app = FaceAnalysis(name="antelopev2", root=root, providers=["CUDAExecutionProvider","CPUExecutionProvider"])
+    app.prepare(ctx_id=0, det_size=(640,640))
+    print(f'[GPU $gpu] [Prefetch] ✅ antelopev2 reinstalled OK')
 PYIN
 
 echo "[GPU $gpu] === 5) Final Smoke Test ==="
